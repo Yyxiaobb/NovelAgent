@@ -1,10 +1,9 @@
 from datetime import datetime
 from typing import Optional
 from sqlalchemy import Index, Integer, String, Enum, DateTime, ForeignKey
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
+from config.db_conf import Base
 
-class Base(DeclarativeBase):
-    pass
 
 class User(Base):
     __tablename__ = 'users'
@@ -32,7 +31,7 @@ class UserToken(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="令牌ID")
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey(User.id), nullable=False, comment="用户ID")
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, comment="用户ID")
     token: Mapped[str] = mapped_column(String(255), unique=True, nullable=True, comment="令牌值")
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, comment="过期时间")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment="创建时间")

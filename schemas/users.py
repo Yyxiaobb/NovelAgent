@@ -2,8 +2,8 @@ from typing import Optional, Literal
 from pydantic import BaseModel, Field, ConfigDict
 
 class UserRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(..., min_length=3, max_length=50, description="用户名")
+    password: str = Field(..., min_length=5, max_length=255, description="密码")
 
 class UserInfoBase(BaseModel):
     """
@@ -17,6 +17,7 @@ class UserInfoBase(BaseModel):
 class UserInfoResponse(UserInfoBase):
     id: int
     username: str
+    phone: Optional[str] = None
 
     model_config = ConfigDict(
         from_attributes=True
