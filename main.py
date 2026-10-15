@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import projects, users
+from routers import projects, recycle_bin, users
 from config.db_conf import init_db, close_db
 from contextlib import asynccontextmanager
 
@@ -21,6 +21,8 @@ app.add_middleware(
 )
 app.include_router(users.router)
 app.include_router(projects.router)
+app.include_router(recycle_bin.router)
+app.include_router(recycle_bin.legacy_router)
 
 @app.get("/")
 async def root():

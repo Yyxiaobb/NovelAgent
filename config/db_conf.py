@@ -1,4 +1,4 @@
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -40,12 +40,31 @@ async def init_db():
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if conn.dialect.name == "mysql":
-            await conn.execute(text(
-                "ALTER TABLE project "
-                "MODIFY COLUMN status "
-                "ENUM('连载中', '完结', '断更', '回收站') "
-                "NULL COMMENT '项目状态'"
-            ))
+            columns = await conn.run_sync(lambda sync_conn: {
+                column["name"]: column
+                for column in inspect(sync_conn).get_columns("project")
+            })
+            if "回收站" not in getattr(columns["status"]["type"], "enums", ()):
+                await conn.execute(text(
+                    "ALTER TABLE project "
+                    "MODIFY COLUMN status "
+                    "ENUM('连载中', '完结', '断更', '回收站') "
+                    "NULL COMMENT '项目状态'"
+                ))
+            if "previous_status" not in columns:
+                await conn.execute(text(
+                    "ALTER TABLE project ADD COLUMN previous_status "
+                    "VARCHAR(20) NULL COMMENT '移入回收站前的项目状态'"
+                ))
+            chapter_columns = await conn.run_sync(lambda sync_conn: {
+                column["name"]
+                for column in inspect(sync_conn).get_columns("chapters")
+            })
+            if "is_deleted" not in chapter_columns:
+                await conn.execute(text(
+                    "ALTER TABLE chapters ADD COLUMN is_deleted "
+                    "BOOLEAN NOT NULL DEFAULT 0 COMMENT '是否已移入回收站'"
+                ))
 
 async def close_db():
     await async_engine.dispose()

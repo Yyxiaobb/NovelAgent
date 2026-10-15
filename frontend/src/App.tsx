@@ -5,6 +5,7 @@ import { AuthPage } from './pages/AuthPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { ProjectsPage } from './pages/ProjectsPage'
+import { RecycleBinPage } from './pages/RecycleBinPage'
 import { SettingsPage } from './pages/SettingsPage'
 
 function ProtectedRoute() {
@@ -21,6 +22,7 @@ export default function App() {
         <Route element={<AppShell />}>
           <Route index element={<DashboardPage />} />
           <Route path="projects" element={<ProjectsPage />} />
+          <Route path="recycle-bin" element={<RecycleBinPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>

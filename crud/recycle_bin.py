@@ -1,0 +1,155 @@
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models.projects import Chapter, Project
+
+_NO_PROJECT_STATUS = "未设置"
+
+
+class ProjectInRecycleBinError(Exception):
+    pass
+
+
+async def move_project_to_recycle_bin(db: AsyncSession, project_id: int, user_id: int):
+    query = select(Project).where(
+        Project.id == project_id,
+        Project.user_id == user_id,
+        or_(Project.status.is_(None), Project.status != "回收站"),
+    ).with_for_update()
+    result = await db.execute(query)
+    project = result.scalar_one_or_none()
+    if project is None:
+        return None
+
+    project.previous_status = project.status or _NO_PROJECT_STATUS
+    project.status = "回收站"
+    await db.commit()
+    await db.refresh(project)
+    return project
+
+
+async def get_recycled_projects(db: AsyncSession, user_id: int):
+    query = select(Project).where(
+        Project.user_id == user_id,
+        Project.status == "回收站",
+    ).order_by(Project.updated_at.desc(), Project.id.desc())
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+async def _get_recycled_project(db: AsyncSession, project_id: int, user_id: int):
+    query = select(Project).where(
+        Project.id == project_id,
+        Project.user_id == user_id,
+        Project.status == "回收站",
+    ).with_for_update()
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
+
+
+async def restore_project(db: AsyncSession, project_id: int, user_id: int):
+    project = await _get_recycled_project(db, project_id, user_id)
+    if project is None:
+        return None
+
+    # 兼容增加 previous_status 字段之前已移入回收站的项目。
+    if project.previous_status == _NO_PROJECT_STATUS:
+        project.status = None
+    elif project.previous_status in ("连载中", "完结", "断更"):
+        project.status = project.previous_status
+    else:
+        project.status = "连载中"
+    project.previous_status = None
+    await db.commit()
+    await db.refresh(project)
+    return project
+
+
+async def permanently_delete_project(db: AsyncSession, project_id: int, user_id: int):
+    project = await _get_recycled_project(db, project_id, user_id)
+    if project is None:
+        return False
+
+    # 使用模型已有的 delete-orphan 级联，在同一事务内删除项目和全部章节。
+    await db.delete(project)
+    await db.commit()
+    return True
+
+
+async def get_recycled_chapters(db: AsyncSession, user_id: int):
+    query = select(Chapter, Project.projectname, Project.status).join(Project).where(
+        Project.user_id == user_id,
+        Chapter.is_deleted.is_(True),
+    ).order_by(Chapter.updated_at.desc(), Chapter.id.desc())
+    result = await db.execute(query)
+    return result.all()
+
+
+async def _get_chapter_for_update(
+    db: AsyncSession, chapter_id: int, user_id: int, *, is_deleted: bool,
+):
+    # 与项目删除统一按“项目 -> 章节”加锁，串行化同一作品的章节统计变更。
+    project_query = select(Project).where(
+        Project.id.in_(select(Chapter.project_id).where(Chapter.id == chapter_id)),
+        Project.user_id == user_id,
+    ).with_for_update()
+    project = (await db.execute(project_query)).scalar_one_or_none()
+    if project is None or (not is_deleted and project.status == "回收站"):
+        return None
+
+    chapter_query = select(Chapter).where(
+        Chapter.id == chapter_id,
+        Chapter.project_id == project.id,
+        Chapter.is_deleted.is_(is_deleted),
+    ).with_for_update()
+    chapter = (await db.execute(chapter_query)).scalar_one_or_none()
+    return (chapter, project) if chapter is not None else None
+
+
+async def _update_chapter_count(db: AsyncSession, project: Project):
+    # 锁定读获取当前数据，避免 MySQL REPEATABLE READ 的旧快照造成统计丢失。
+    count_query = select(Chapter.id).where(
+        Chapter.project_id == project.id,
+        Chapter.is_deleted.is_(False),
+    ).with_for_update()
+    project.chapter_count = len((await db.scalars(count_query)).all())
+
+
+async def move_chapter_to_recycle_bin(db: AsyncSession, chapter_id: int, user_id: int):
+    match = await _get_chapter_for_update(db, chapter_id, user_id, is_deleted=False)
+    if match is None:
+        return None
+
+    chapter, project = match
+    chapter.is_deleted = True
+    await _update_chapter_count(db, project)
+    await db.commit()
+    await db.refresh(chapter)
+    return chapter
+
+
+async def restore_chapter(db: AsyncSession, chapter_id: int, user_id: int):
+    match = await _get_chapter_for_update(db, chapter_id, user_id, is_deleted=True)
+    if match is None:
+        return None
+
+    chapter, project = match
+    if project.status == "回收站":
+        raise ProjectInRecycleBinError("请先还原所属项目，再还原章节")
+    chapter.is_deleted = False
+    await _update_chapter_count(db, project)
+    await db.commit()
+    await db.refresh(chapter)
+    return chapter
+
+
+async def permanently_delete_chapter(db: AsyncSession, chapter_id: int, user_id: int):
+    match = await _get_chapter_for_update(db, chapter_id, user_id, is_deleted=True)
+    if match is None:
+        return False
+
+    chapter, project = match
+    await db.delete(chapter)
+    await _update_chapter_count(db, project)
+    await db.commit()
+    return True

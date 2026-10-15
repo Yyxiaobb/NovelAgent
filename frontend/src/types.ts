@@ -23,7 +23,22 @@ export interface Project {
   chapter_count: number
   created_at: string
   updated_at: string
-  status: string
+  status: string | null
+}
+
+export interface Chapter {
+  id: number
+  project_id: number
+  chapter_number: number
+  chaptername: string | null
+  created_at: string
+  updated_at: string
+  is_deleted: boolean
+}
+
+export interface RecycledChapter extends Chapter {
+  projectname: string | null
+  project_status: string | null
 }
 
 export interface ApiResponse<T> {

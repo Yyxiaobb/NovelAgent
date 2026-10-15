@@ -1,10 +1,11 @@
-import { BookOpen, FolderKanban, LayoutDashboard, LogOut, Settings, UserRound } from 'lucide-react'
+import { BookOpen, FolderKanban, LayoutDashboard, LogOut, Settings, Trash2, UserRound } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 
 const navigation = [
   { to: '/', label: '工作台', icon: LayoutDashboard, end: true },
   { to: '/projects', label: '作品', icon: FolderKanban },
+  { to: '/recycle-bin', label: '回收站', icon: Trash2 },
   { to: '/profile', label: '资料', icon: UserRound },
   { to: '/settings', label: '设置', icon: Settings },
 ]

@@ -1,4 +1,4 @@
-import type { ApiResponse, AuthData, ProfilePayload, Project, User } from '../types'
+import type { ApiResponse, AuthData, Chapter, ProfilePayload, Project, RecycledChapter, User } from '../types'
 
 const TOKEN_KEY = 'novel-agent-token'
 
@@ -65,6 +65,21 @@ export const api = {
     }),
   logout: () => request<null>('/api/user/logout', { method: 'POST' }),
   getProjects: () => request<Project[]>('/api/project/projects'),
+  getProjectChapters: (projectId: number) => request<Chapter[]>(`/api/project/${projectId}/chapters`),
+  getRecycledProjects: () => request<Project[]>('/api/recycle-bin/projects'),
+  getRecycledChapters: () => request<RecycledChapter[]>('/api/recycle-bin/chapters'),
+  recycleProject: (projectId: number) =>
+    request<Project>(`/api/recycle-bin/projects/${projectId}/trash`, { method: 'POST' }),
+  restoreProject: (projectId: number) =>
+    request<Project>(`/api/recycle-bin/projects/${projectId}/restore`, { method: 'PUT' }),
+  permanentlyDeleteProject: (projectId: number) =>
+    request<null>(`/api/recycle-bin/projects/${projectId}`, { method: 'DELETE' }),
+  recycleChapter: (chapterId: number) =>
+    request<Chapter>(`/api/recycle-bin/chapters/${chapterId}/trash`, { method: 'POST' }),
+  restoreChapter: (chapterId: number) =>
+    request<Chapter>(`/api/recycle-bin/chapters/${chapterId}/restore`, { method: 'PUT' }),
+  permanentlyDeleteChapter: (chapterId: number) =>
+    request<null>(`/api/recycle-bin/chapters/${chapterId}`, { method: 'DELETE' }),
   createProject: (projectname: string, introduction: string) =>
     request<Project>('/api/project/newProject', {
       method: 'POST',

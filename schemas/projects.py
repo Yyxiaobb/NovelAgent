@@ -12,9 +12,26 @@ class ProjectInfoBase(ProjectRequest):
     chapter_count: int = 0
     created_at: datetime
     updated_at: datetime
-    status: str
+    status: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
 class ProjectUpdateRequest(ProjectRequest):
     status: str
+
+
+class ChapterInfo(BaseModel):
+    id: int
+    project_id: int
+    chapter_number: int
+    chaptername: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    is_deleted: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RecycledChapterInfo(ChapterInfo):
+    projectname: Optional[str] = None
+    project_status: Optional[str] = None

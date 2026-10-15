@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Index, Integer, String, Enum, DateTime, ForeignKey
+from sqlalchemy import Boolean, Index, Integer, String, Enum, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from config.db_conf import Base
@@ -19,6 +19,7 @@ class Project(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False, comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False, comment="更新时间")
     status: Mapped[Optional[str]] = mapped_column(Enum("连载中", "完结", "断更", "回收站"), default="连载中", comment="项目状态")
+    previous_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, comment="移入回收站前的项目状态")
     chapters: Mapped[list["Chapter"]] = relationship(
         back_populates="project", cascade="all, delete-orphan", order_by="Chapter.chapter_number"
     )
@@ -35,4 +36,5 @@ class Chapter(Base):
     project_id: Mapped[int] = mapped_column(Integer, ForeignKey("project.id"), nullable=False, comment="项目ID")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False, comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="是否已移入回收站")
     project: Mapped["Project"] = relationship(back_populates="chapters")
