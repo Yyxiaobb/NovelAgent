@@ -1,10 +1,9 @@
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Boolean, Index, Integer, String, Enum, DateTime, ForeignKey, Text, JSON, UniqueConstraint
+from sqlalchemy import Boolean, Integer, String, Enum, DateTime, ForeignKey, Text, JSON, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from config.db_conf import Base
-from .users import User
 
 
 class Project(Base):

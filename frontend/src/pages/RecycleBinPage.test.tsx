@@ -131,7 +131,7 @@ describe('回收站页面', () => {
     renderPage()
 
     await user.click(await screen.findByRole('button', { name: '还原雾港来信' }))
-    let dialog = screen.getByRole('dialog', { name: '还原作品' })
+    const dialog = screen.getByRole('dialog', { name: '还原作品' })
     await user.click(within(dialog).getByRole('button', { name: '确认还原' }))
     expectText(await within(dialog).findByRole('alert'), '服务暂时不可用')
     expect(await screen.findByRole('heading', { name: '雾港来信' })).toBeTruthy()

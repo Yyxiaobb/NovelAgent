@@ -1,6 +1,4 @@
 import json
-import math
-from urllib.parse import urlsplit
 
 
 PROJECT_TYPES = "玄幻、都市、言情、悬疑、科幻、历史、武侠、现实、灵异、同人、儿童、其他"
