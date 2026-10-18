@@ -30,7 +30,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function authenticate(mode: 'login' | 'register', username: string, password: string) {
     const result = await api[mode](username, password)
-    tokenStore.set(result.token)
+    // New browser sessions use the HttpOnly cookie. Clear an older bearer
+    // token so it is not retained after a fresh login.
+    tokenStore.clear()
+    if (result.token) tokenStore.set(result.token)
     setUser(result.userInfo)
   }
 

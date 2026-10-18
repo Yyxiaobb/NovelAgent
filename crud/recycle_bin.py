@@ -2,6 +2,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.projects import Chapter, Project
+from crud.projects import recalculate_project_stats
 
 _NO_PROJECT_STATUS = "未设置"
 
@@ -107,12 +108,8 @@ async def _get_chapter_for_update(
 
 
 async def _update_chapter_count(db: AsyncSession, project: Project):
-    # 锁定读获取当前数据，避免 MySQL REPEATABLE READ 的旧快照造成统计丢失。
-    count_query = select(Chapter.id).where(
-        Chapter.project_id == project.id,
-        Chapter.is_deleted.is_(False),
-    ).with_for_update()
-    project.chapter_count = len((await db.scalars(count_query)).all())
+    # Recalculate both counters from the same locked chapter snapshot.
+    await recalculate_project_stats(db, project, lock=True)
 
 
 async def move_chapter_to_recycle_bin(db: AsyncSession, chapter_id: int, user_id: int):

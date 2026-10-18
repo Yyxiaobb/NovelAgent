@@ -23,6 +23,8 @@ LLM_MAX_RETRIES=2
 
 `model`、`api_key`、`base_url` 必填。`provider` 仅是服务标识，不决定 URL 或协议。HTTP 地址可用于本地兼容服务，公网服务建议使用 HTTPS。`.env` 不应提交到 Git。
 
+后端的智能体路由 `POST /api/agent/project-field` 使用该客户端为作品名称、作品简介或作品类型生成候选内容，需要登录并先配置上述模型环境变量。
+
 构造参数优先于环境变量；环境变量优先于 `.env` 中的同名变量。保留旧配置 `MODEL`、`API_KEY`、`BASE_URL`、`PROVIDER`、`TIMEOUT` 和 `MAX_RETRIES`，但优先读取 `LLM_` 前缀的配置。超时单位为秒，重试使用 SDK 自带机制。
 
 ## 同步调用

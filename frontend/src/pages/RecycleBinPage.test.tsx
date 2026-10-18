@@ -72,6 +72,14 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('回收站页面', () => {
+  it('作品页右上角不再重复显示回收站入口', async () => {
+    renderPage('/projects')
+    await screen.findByRole('heading', { name: '作品集还是空的' })
+    const header = screen.getByRole('heading', { name: '我的作品' }).closest('header')!
+    expect(within(header).queryByRole('link', { name: '回收站' })).toBeNull()
+    expect(within(header).getByRole('button', { name: '新建作品' })).toBeTruthy()
+  })
+
   it('渲染回收站作品、章节统计并搜索简介', async () => {
     renderPage()
     expect(await screen.findByRole('heading', { name: '雾港来信' })).toBeTruthy()

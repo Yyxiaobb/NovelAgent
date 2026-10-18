@@ -1,3 +1,4 @@
+import json
 import unittest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -13,7 +14,7 @@ from config.db_conf import Base, get_db
 from models.projects import Chapter, Project
 from models.users import User, UserToken
 from routers.projects import router
-from routers import recycle_bin
+from routers import agent, recycle_bin
 
 
 class RecycleBinTestCase(unittest.IsolatedAsyncioTestCase):
@@ -52,6 +53,7 @@ class RecycleBinTestCase(unittest.IsolatedAsyncioTestCase):
 
         app = FastAPI()
         app.include_router(router)
+        app.include_router(agent.router)
         app.include_router(recycle_bin.router)
         app.include_router(recycle_bin.legacy_router)
         app.dependency_overrides[get_db] = test_db
@@ -207,6 +209,287 @@ class ProjectRecycleBinTests(RecycleBinTestCase):
             self.assertEqual(len((await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).all()), 2)
 
 
+class ProjectEditingTests(RecycleBinTestCase):
+    async def test_project_and_chapter_saves_are_committed(self):
+        project_id = await self.seed_project(chapter_count=1)
+
+        project_response = await self.client.put(
+            f"/api/project/{project_id}",
+            json={
+                "projectname": "已保存作品",
+                "introduction": "已保存简介",
+                "project_type": "科幻",
+                "cover_url": "https://example.com/saved-cover.jpg",
+                "status": "完结",
+            },
+        )
+        self.assertEqual(project_response.status_code, 200)
+
+        async with self.sessions() as session:
+            saved_project = await session.get(Project, project_id)
+            self.assertEqual(saved_project.projectname, "已保存作品")
+            self.assertEqual(saved_project.introduction, "已保存简介")
+            self.assertEqual(saved_project.project_type, "科幻")
+            self.assertEqual(saved_project.cover_url, "https://example.com/saved-cover.jpg")
+            self.assertEqual(saved_project.status, "完结")
+            chapter = (await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).first()
+            chapter_id = chapter.id
+
+        chapter_response = await self.client.put(
+            f"/api/project/{project_id}/chapters/{chapter_id}",
+            json={"chapter_number": 3, "chaptername": "已保存章节"},
+        )
+        self.assertEqual(chapter_response.status_code, 200)
+
+        new_chapter_response = await self.client.post(
+            f"/api/project/{project_id}/chapters",
+            json={"chapter_number": 4, "chaptername": "新增章节", "content": "新增内容"},
+        )
+        self.assertEqual(new_chapter_response.status_code, 200)
+        duplicate_response = await self.client.post(
+            f"/api/project/{project_id}/chapters",
+            json={"chapter_number": 4, "chaptername": "重复编号"},
+        )
+        self.assertEqual(duplicate_response.status_code, 409)
+
+        async with self.sessions() as session:
+            saved_chapter = await session.get(Chapter, chapter_id)
+            self.assertEqual(saved_chapter.chapter_number, 3)
+            self.assertEqual(saved_chapter.chaptername, "已保存章节")
+            added_id = new_chapter_response.json()["data"]["id"]
+            added_chapter = await session.get(Chapter, added_id)
+            self.assertEqual(added_chapter.chaptername, "新增章节")
+            self.assertEqual(added_chapter.content, "新增内容")
+            saved_project = await session.get(Project, project_id)
+            self.assertEqual(saved_project.chapter_count, 2)
+
+    async def test_project_stats_follow_active_chapter_content(self):
+        project_id = await self.seed_project(chapter_count=0)
+        created = await self.client.post(
+            f"/api/project/{project_id}/chapters",
+            json={"chapter_number": 1, "chaptername": "第一章", "content": "星河启航"},
+        )
+        self.assertEqual(created.status_code, 200)
+        async with self.sessions() as session:
+            project = await session.get(Project, project_id)
+            self.assertEqual(project.chapter_count, 1)
+            self.assertEqual(project.total_words, 4)
+
+        chapter_id = created.json()["data"]["id"]
+        updated = await self.client.put(
+            f"/api/project/{project_id}/chapters/{chapter_id}",
+            json={"chapter_number": 1, "chaptername": "第一章", "content": "星河启航，开始远行"},
+        )
+        self.assertEqual(updated.status_code, 200)
+        async with self.sessions() as session:
+            project = await session.get(Project, project_id)
+            self.assertEqual(project.total_words, 9)
+
+        self.assertEqual((await self.client.post(f"/api/recycle-bin/chapters/{chapter_id}/trash")).status_code, 200)
+        async with self.sessions() as session:
+            project = await session.get(Project, project_id)
+            self.assertEqual((project.chapter_count, project.total_words), (0, 0))
+
+        self.assertEqual((await self.client.put(f"/api/recycle-bin/chapters/{chapter_id}/restore")).status_code, 200)
+        async with self.sessions() as session:
+            project = await session.get(Project, project_id)
+            self.assertEqual((project.chapter_count, project.total_words), (1, 9))
+
+    async def test_outline_save_is_committed(self):
+        project_id = await self.seed_project(chapter_count=0)
+        response = await self.client.put(
+            f"/api/project/{project_id}/outline",
+            json={"outline": "第一幕：相遇\n第二幕：远行"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["outline"], "第一幕：相遇\n第二幕：远行")
+        async with self.sessions() as session:
+            project = await session.get(Project, project_id)
+            self.assertEqual(project.outline, "第一幕：相遇\n第二幕：远行")
+
+    async def test_generate_outline_uses_project_context_and_persists_target_words(self):
+        project_id = await self.seed_project(chapter_count=0)
+        async with self.sessions() as session:
+            project = await session.get(Project, project_id)
+            project.project_type = "科幻"
+            project.introduction = "探险队穿越深空，寻找失落的家园。"
+            project.projectname = "星河归途"
+            await session.commit()
+
+        with patch("routers.agent.LLMClient") as llm_class:
+            client = llm_class.return_value.__aenter__.return_value
+            client.achat = AsyncMock(return_value="第一卷：星海启程")
+            response = await self.client.post(
+                f"/api/agent/projects/{project_id}/outline",
+                json={"expected_words": 120000, "user_idea": "双主角视角，结局温暖"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["outline"], "第一卷：星海启程")
+        self.assertEqual(response.json()["data"]["expected_words"], 120000)
+        prompt = client.achat.await_args.args[0][1]["content"]
+        self.assertIn("作品类型：科幻", prompt)
+        self.assertIn("约 120000 字", prompt)
+        self.assertIn("双主角视角，结局温暖", prompt)
+        async with self.sessions() as session:
+            self.assertEqual((await session.get(Project, project_id)).expected_words, 120000)
+
+    async def test_generate_outline_rejects_invalid_word_count_and_missing_project(self):
+        project_id = await self.seed_project(chapter_count=0)
+        invalid = await self.client.post(
+            f"/api/agent/projects/{project_id}/outline", json={"expected_words": 0},
+        )
+        self.assertEqual(invalid.status_code, 422)
+        missing = await self.client.post(
+            "/api/agent/projects/9999/outline", json={"expected_words": 100000},
+        )
+        self.assertEqual(missing.status_code, 404)
+
+    async def test_generate_chapter_content_uses_project_outline_and_chapter_context(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            project = await session.get(Project, project_id)
+            project.project_type = "科幻"
+            project.introduction = "探险队寻找失落家园。"
+            project.outline = "第一卷：穿越深空"
+            chapter = (await session.execute(select(Chapter).where(Chapter.project_id == project_id))).scalar_one()
+            chapter.chaptername = "启航"
+            chapter_id = chapter.id
+            await session.commit()
+
+        with patch("routers.agent.LLMClient") as llm_class:
+            client = llm_class.return_value.__aenter__.return_value
+            client.achat = AsyncMock(return_value="飞船缓缓驶离港口。")
+            response = await self.client.post(
+                f"/api/agent/projects/{project_id}/chapters/{chapter_id}/content",
+                json={"expected_words": 2500, "user_idea": "结尾出现新的线索"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["content"], "飞船缓缓驶离港口。")
+        prompt = client.achat.await_args.args[0][1]["content"]
+        self.assertIn("作品类型：科幻", prompt)
+        self.assertIn("第一卷：穿越深空", prompt)
+        self.assertIn("第 1 章", prompt)
+        self.assertIn("约 2500 字", prompt)
+        self.assertIn("结尾出现新的线索", prompt)
+
+    async def test_generate_chapter_content_uses_prior_chapter_memory(self):
+        project_id = await self.seed_project(chapter_count=2)
+        async with self.sessions() as session:
+            chapters = list((await session.scalars(
+                select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_number)
+            )).all())
+            chapters[0].summary = "主角在遗迹中获得了残缺地图。"
+            chapters[0].memory = {
+                "character_state": "主角决定追查地图来源",
+                "setting_changes": "遗迹出现未知能量",
+                "unresolved_threads": "地图指向北境关隘",
+                "timeline": "启航后的第三天",
+            }
+            chapter_id = chapters[1].id
+            await session.commit()
+
+        with patch("routers.agent.LLMClient") as llm_class:
+            client = llm_class.return_value.__aenter__.return_value
+            client.achat = AsyncMock(return_value="北境关隘外，风雪骤起。")
+            response = await self.client.post(
+                f"/api/agent/projects/{project_id}/chapters/{chapter_id}/content",
+                json={"expected_words": 1800},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        prompt = client.achat.await_args.args[0][1]["content"]
+        self.assertIn("主角在遗迹中获得了残缺地图", prompt)
+        self.assertIn("主角决定追查地图来源", prompt)
+        self.assertIn("地图指向北境关隘", prompt)
+
+    async def test_generate_chapter_memory_persists_summary_and_structured_memory(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            chapter = (await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).one()
+            chapter.content = "主角在雨夜救下信使，并得知王城即将封锁。"
+            chapter_id = chapter.id
+            await session.commit()
+
+        generated = {
+            "summary": "主角救下信使，得知王城即将封锁。",
+            "character_state": "主角决定护送信使",
+            "setting_changes": "王城即将封锁",
+            "unresolved_threads": "信使携带的密函来源不明",
+            "timeline": "雨夜，王城封锁前",
+        }
+        with patch("routers.agent.LLMClient") as llm_class:
+            client = llm_class.return_value.__aenter__.return_value
+            client.achat = AsyncMock(return_value=json.dumps(generated, ensure_ascii=False))
+            response = await self.client.post(
+                f"/api/agent/projects/{project_id}/chapters/{chapter_id}/memory",
+                json={"user_idea": "只记录正文明确发生的事情"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["summary"], generated["summary"])
+        self.assertEqual(response.json()["data"]["memory"], {key: generated[key] for key in generated if key != "summary"})
+        async with self.sessions() as session:
+            saved = await session.get(Chapter, chapter_id)
+            self.assertEqual(saved.summary, generated["summary"])
+            self.assertEqual(saved.memory["unresolved_threads"], generated["unresolved_threads"])
+
+    async def test_generate_chapter_memory_rejects_empty_content_and_invalid_json(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            chapter = (await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).one()
+            chapter_id = chapter.id
+
+        empty = await self.client.post(f"/api/agent/projects/{project_id}/chapters/{chapter_id}/memory", json={})
+        self.assertEqual(empty.status_code, 422)
+
+        async with self.sessions() as session:
+            (await session.get(Chapter, chapter_id)).content = "已有正文"
+            await session.commit()
+        with patch("routers.agent.LLMClient") as llm_class:
+            client = llm_class.return_value.__aenter__.return_value
+            client.achat = AsyncMock(return_value="不是 JSON")
+            invalid = await self.client.post(f"/api/agent/projects/{project_id}/chapters/{chapter_id}/memory", json={})
+        self.assertEqual(invalid.status_code, 502)
+
+    async def test_generate_chapter_content_rejects_invalid_length_or_resource(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            chapter = (await session.execute(select(Chapter).where(Chapter.project_id == project_id))).scalar_one()
+            chapter_id = chapter.id
+        invalid = await self.client.post(
+            f"/api/agent/projects/{project_id}/chapters/{chapter_id}/content",
+            json={"expected_words": 0},
+        )
+        self.assertEqual(invalid.status_code, 422)
+        missing = await self.client.post(
+            f"/api/agent/projects/{project_id}/chapters/9999/content",
+            json={"expected_words": 3000},
+        )
+        self.assertEqual(missing.status_code, 404)
+
+    async def test_chapter_plan_can_be_saved_and_read_back(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            chapter_id = (await session.execute(select(Chapter.id).where(Chapter.project_id == project_id))).scalar_one()
+        plan = {
+            "objective": "完成第一次启航",
+            "conflict": "主角面对未知信号",
+            "key_events": "离港；发现信号；决定追踪",
+            "ending_hook": "信号来自船内",
+            "expected_words": 3000,
+        }
+        response = await self.client.put(
+            f"/api/project/{project_id}/chapters/{chapter_id}",
+            json={"chapter_number": 1, "chaptername": "启航", "content": "正文", "plan": plan},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["plan"], plan)
+        detail = await self.client.get(f"/api/project/{project_id}/chapters/{chapter_id}")
+        self.assertEqual(detail.json()["data"]["plan"], plan)
+
+
 class ChapterRecycleBinTests(RecycleBinTestCase):
     async def chapter_ids(self, project_id):
         async with self.sessions() as session:
@@ -247,7 +530,9 @@ class ChapterRecycleBinTests(RecycleBinTestCase):
         self.assertEqual((await self.client.get("/api/recycle-bin/chapters")).json()["data"], [])
         async with self.sessions() as session:
             self.assertEqual((await session.get(Project, project_id)).chapter_count, 3)
-            self.assertEqual((await session.get(Project, project_id)).total_words, 1200)
+            # The project word count is rebuilt from active chapter content;
+            # these fixture chapters have no content, so the count is zero.
+            self.assertEqual((await session.get(Project, project_id)).total_words, 0)
 
     async def test_only_deleted_chapters_can_be_restored_or_permanently_deleted(self):
         project_id = await self.seed_project(chapter_count=1)
@@ -380,13 +665,29 @@ class ChapterRecycleBinTests(RecycleBinTestCase):
 
 
 class ProjectSchemaUpgradeTests(unittest.IsolatedAsyncioTestCase):
-    async def check_upgrade(self, *, existing_statuses, has_previous_status, has_is_deleted=True):
+    async def check_upgrade(self, *, existing_statuses, has_previous_status, has_is_deleted=True, has_project_type=True, has_cover_url=True, has_outline=True, has_expected_words=True, has_content=True, has_plan=True, has_summary=True, has_memory=True):
         columns = {"status": {"type": SimpleNamespace(enums=existing_statuses)}}
         if has_previous_status:
             columns["previous_status"] = {"type": None}
+        if has_project_type:
+            columns["project_type"] = {"type": None}
+        if has_cover_url:
+            columns["cover_url"] = {"type": None}
+        if has_outline:
+            columns["outline"] = {"type": None}
+        if has_expected_words:
+            columns["expected_words"] = {"type": None}
         connection = MagicMock()
         connection.dialect.name = "mysql"
         chapter_columns = {"is_deleted"} if has_is_deleted else set()
+        if has_content:
+            chapter_columns.add("content")
+        if has_plan:
+            chapter_columns.add("plan")
+        if has_summary:
+            chapter_columns.add("summary")
+        if has_memory:
+            chapter_columns.add("memory")
         connection.run_sync = AsyncMock(side_effect=[None, columns, chapter_columns])
         connection.execute = AsyncMock()
         engine = MagicMock()
@@ -418,6 +719,76 @@ class ProjectSchemaUpgradeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(statements), 1)
         self.assertIn("ALTER TABLE chapters ADD COLUMN is_deleted", statements[0])
         self.assertIn("NOT NULL DEFAULT 0", statements[0])
+
+    async def test_adds_project_type_for_existing_rows(self):
+        statements = await self.check_upgrade(
+            existing_statuses=["连载中", "完结", "断更", "回收站"],
+            has_previous_status=True, has_is_deleted=True, has_project_type=False,
+        )
+        self.assertEqual(len(statements), 1)
+        self.assertIn("ALTER TABLE project ADD COLUMN project_type", statements[0])
+
+    async def test_adds_cover_url_for_existing_rows(self):
+        statements = await self.check_upgrade(
+            existing_statuses=["连载中", "完结", "断更", "回收站"],
+            has_previous_status=True, has_is_deleted=True,
+            has_project_type=True, has_cover_url=False,
+        )
+        self.assertEqual(len(statements), 1)
+        self.assertIn("ALTER TABLE project ADD COLUMN cover_url", statements[0])
+
+    async def test_adds_outline_for_existing_rows(self):
+        statements = await self.check_upgrade(
+            existing_statuses=["连载中", "完结", "断更", "回收站"],
+            has_previous_status=True, has_is_deleted=True, has_project_type=True,
+            has_cover_url=True, has_outline=False,
+        )
+        self.assertEqual(len(statements), 1)
+        self.assertIn("ALTER TABLE project ADD COLUMN outline", statements[0])
+
+    async def test_adds_expected_words_for_existing_rows(self):
+        statements = await self.check_upgrade(
+            existing_statuses=["连载中", "完结", "断更", "回收站"],
+            has_previous_status=True, has_is_deleted=True, has_project_type=True,
+            has_cover_url=True, has_outline=True, has_expected_words=False,
+        )
+        self.assertEqual(len(statements), 1)
+        self.assertIn("ALTER TABLE project ADD COLUMN expected_words", statements[0])
+        self.assertIn("INT NULL", statements[0])
+
+    async def test_adds_chapter_content_for_existing_rows(self):
+        statements = await self.check_upgrade(
+            existing_statuses=["连载中", "完结", "断更", "回收站"],
+            has_previous_status=True, has_is_deleted=True, has_content=False,
+        )
+        self.assertEqual(len(statements), 1)
+        self.assertIn("ALTER TABLE chapters ADD COLUMN content", statements[0])
+
+    async def test_adds_chapter_plan_for_existing_rows(self):
+        statements = await self.check_upgrade(
+            existing_statuses=["连载中", "完结", "断更", "回收站"],
+            has_previous_status=True, has_is_deleted=True, has_content=True, has_plan=False,
+        )
+        self.assertEqual(len(statements), 1)
+        self.assertIn("ALTER TABLE chapters ADD COLUMN plan", statements[0])
+
+    async def test_adds_chapter_summary_for_existing_rows(self):
+        statements = await self.check_upgrade(
+            existing_statuses=["连载中", "完结", "断更", "回收站"],
+            has_previous_status=True, has_is_deleted=True, has_content=True, has_plan=True,
+            has_summary=False,
+        )
+        self.assertEqual(len(statements), 1)
+        self.assertIn("ALTER TABLE chapters ADD COLUMN summary", statements[0])
+
+    async def test_adds_chapter_memory_for_existing_rows(self):
+        statements = await self.check_upgrade(
+            existing_statuses=["连载中", "完结", "断更", "回收站"],
+            has_previous_status=True, has_is_deleted=True, has_content=True, has_plan=True,
+            has_summary=True, has_memory=False,
+        )
+        self.assertEqual(len(statements), 1)
+        self.assertIn("ALTER TABLE chapters ADD COLUMN memory", statements[0])
 
 
 if __name__ == "__main__":

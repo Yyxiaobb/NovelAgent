@@ -24,19 +24,13 @@ async def create_user(db: AsyncSession, user_data: UserRequest):
     return new_user
 
 async def create_token(db: AsyncSession, user_id: int):
-    # 生成 Token + 设置过期时间 -> 查询数据库当前用户是否有 Token -> 有：更新；没有：添加
+    # Each login gets an independent session so logging in on one device does
+    # not invalidate another device. Expired sessions are removed while the
+    # user is logging in to keep the table bounded.
     token = str(uuid.uuid4())
     expires_at = datetime.now() + timedelta(days=7)
-    query = select(UserToken).where(UserToken.user_id == user_id)
-    result = await db.execute(query)
-    user_token = result.scalar_one_or_none()
-
-    if user_token:
-        user_token.token = token
-        user_token.expires_at = expires_at
-    else:
-        user_token = UserToken(user_id=user_id, token=token, expires_at=expires_at)
-        db.add(user_token)
+    await db.execute(delete(UserToken).where(UserToken.expires_at <= datetime.now()))
+    db.add(UserToken(user_id=user_id, token=token, expires_at=expires_at))
 
     await db.commit()
 
@@ -52,10 +46,13 @@ async def authenticate_user(db: AsyncSession, username: str, password: str):
 
 
 async def get_user_by_token(db: AsyncSession, token: str):
-    query = select(UserToken).where(UserToken.token == token)
+    query = select(UserToken).where(
+        UserToken.token == token,
+        UserToken.expires_at > datetime.now(),
+    )
     result = await db.execute(query)
     db_token = result.scalar_one_or_none()
-    if not db_token or db_token.expires_at < datetime.now():
+    if not db_token:
         return None
     query = select(User).where(User.id == db_token.user_id)
     result = await db.execute(query)
@@ -75,13 +72,23 @@ async def update_user(db: AsyncSession, username: str, user_data: UserUpdateRequ
     updated_user = await get_user_by_username(db, username)
     return updated_user
 
-async def change_password(db: AsyncSession, user: User, old_password: str, new_password: str):
+async def change_password(
+    db: AsyncSession,
+    user: User,
+    old_password: str,
+    new_password: str,
+    current_token: str | None = None,
+):
     if not security.verify_password(old_password, user.password):
         return False
 
     hashed_new_password = security.get_hash_password(new_password)
     user.password = hashed_new_password
     db.add(user)
+    session_query = delete(UserToken).where(UserToken.user_id == user.id)
+    if current_token:
+        session_query = session_query.where(UserToken.token != current_token)
+    await db.execute(session_query)
     await db.commit()
     await db.refresh(user)
     return True

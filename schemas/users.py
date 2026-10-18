@@ -24,7 +24,7 @@ class UserInfoResponse(UserInfoBase):
     )
 
 class UserAuthResponse(BaseModel):
-    token: str
+    token: Optional[str] = None
     user_info: UserInfoResponse = Field(..., alias="userInfo")
 
     model_config = ConfigDict(

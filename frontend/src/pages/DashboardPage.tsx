@@ -1,6 +1,6 @@
 import { ArrowRight, BookOpenText, FileText, Plus, TrendingUp } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import type { Project } from '../types'
@@ -10,13 +10,22 @@ const dateFormat = new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'nume
 
 export function DashboardPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  useEffect(() => {
+  const loadProjects = useCallback(() => {
+    setLoading(true)
+    setError('')
     api.getProjects().then(setProjects).catch((reason) => setError(reason.message)).finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    loadProjects()
+    window.addEventListener('projects:changed', loadProjects)
+    return () => window.removeEventListener('projects:changed', loadProjects)
+  }, [loadProjects])
 
   const totals = useMemo(() => ({
     words: projects.reduce((sum, project) => sum + project.total_words, 0),
@@ -29,7 +38,7 @@ export function DashboardPage() {
     <div className="page">
       <header className="page-header dashboard-header">
         <div><p className="eyebrow">创作概览</p><h1>{user?.nickname || user?.username}，今天写点什么？</h1><p>故事不必一次写完，但值得每天向前一点。</p></div>
-        <Link className="primary-button" to="/projects?create=1"><Plus size={17} />新建作品</Link>
+        <Link className="primary-button" to="/?create=1"><Plus size={17} />新建作品</Link>
       </header>
 
       <section className="metrics-grid" aria-label="作品统计">
@@ -43,13 +52,22 @@ export function DashboardPage() {
         {error ? <div className="empty-state compact"><p>{error}</p><button className="secondary-button" onClick={() => window.location.reload()}>重新加载</button></div>
           : loading ? <div className="project-list skeleton-list"><span /><span /><span /></div>
           : recentProjects.length === 0 ? (
-            <div className="empty-state"><BookOpenText size={30} /><h3>还没有作品</h3><p>创建第一部作品，让想法有一个清晰的起点。</p><Link className="primary-button" to="/projects?create=1"><Plus size={17} />新建作品</Link></div>
+            <div className="empty-state"><BookOpenText size={30} /><h3>还没有作品</h3><p>创建第一部作品，让想法有一个清晰的起点。</p></div>
           ) : (
             <div className="project-list">
               {recentProjects.map((project) => (
-                <article className="project-row" key={project.id}>
+                <article className="project-row project-row-clickable" key={project.id} role="link" tabIndex={0} aria-label={`查看${project.projectname || '未命名作品'}详情`} onClick={(event) => {
+                  if ((event.target as HTMLElement).closest('a, button')) return
+                  navigate(`/projects/${project.id}`)
+                }} onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    navigate(`/projects/${project.id}`)
+                  }
+                }}>
                   <span className="book-spine" aria-hidden="true" />
-                  <div className="project-main"><h3>{project.projectname || '未命名作品'}</h3><p>{project.introduction || '尚未填写作品简介'}</p></div>
+                  <div className="project-main"><h3><Link className="project-card-link" to={`/projects/${project.id}`}>{project.projectname || '未命名作品'}</Link></h3><p>{project.introduction || '尚未填写作品简介'}</p></div>
                   <div className="project-meta"><span>{project.chapter_count} 章</span><span>{numberFormat.format(project.total_words)} 字</span></div>
                   <time dateTime={project.updated_at}>{dateFormat.format(new Date(project.updated_at))}</time>
                   <span className={`status-badge ${project.status === '完结' ? 'done' : project.status === '断更' ? 'paused' : ''}`}>{project.status}</span>

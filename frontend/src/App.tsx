@@ -5,6 +5,9 @@ import { AuthPage } from './pages/AuthPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { ProjectsPage } from './pages/ProjectsPage'
+import { ProjectDetailPage } from './pages/ProjectDetailPage'
+import { ChapterDetailPage } from './pages/ChapterDetailPage'
+import { OutlineDetailPage } from './pages/OutlineDetailPage'
 import { RecycleBinPage } from './pages/RecycleBinPage'
 import { SettingsPage } from './pages/SettingsPage'
 
@@ -22,6 +25,11 @@ export default function App() {
         <Route element={<AppShell />}>
           <Route index element={<DashboardPage />} />
           <Route path="projects" element={<ProjectsPage />} />
+          <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+          <Route path="projects/:projectId/chapters/:chapterId" element={<ChapterDetailPage />} />
+          <Route path="projects/:projectId/chapters/:chapterId/:feature" element={<ChapterDetailPage />} />
+          <Route path="projects/:projectId/outline" element={<OutlineDetailPage />} />
+          <Route path="projects/:projectId/outline/:feature" element={<OutlineDetailPage />} />
           <Route path="recycle-bin" element={<RecycleBinPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />

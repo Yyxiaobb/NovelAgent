@@ -1,8 +1,7 @@
 import { BookOpenText, CalendarDays, ChevronDown, ChevronUp, FileText, Plus, Search, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
-import { Modal } from '../components/Modal'
 import { ChapterActionDialog } from '../components/ChapterActionDialog'
 import { ProjectActionDialog } from '../components/ProjectActionDialog'
 import type { Chapter, Project } from '../types'
@@ -15,15 +14,11 @@ function chapterTitle(chapter: Chapter) {
 }
 
 export function ProjectsPage() {
-  const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
-  const [name, setName] = useState('')
-  const [introduction, setIntroduction] = useState('')
-  const [submitError, setSubmitError] = useState('')
-  const [submitting, setSubmitting] = useState(false)
   const [recycleTarget, setRecycleTarget] = useState<Project | null>(null)
   const [chapterRecycleTarget, setChapterRecycleTarget] = useState<Chapter | null>(null)
   const [expandedProjectId, setExpandedProjectId] = useState<number | null>(null)
@@ -32,8 +27,6 @@ export function ProjectsPage() {
   const [chapterError, setChapterError] = useState('')
   const [chapterReloadKey, setChapterReloadKey] = useState(0)
   const [notice, setNotice] = useState('')
-  const modalOpen = searchParams.get('create') === '1'
-
   const loadProjects = useCallback(() => {
     setLoading(true)
     setError('')
@@ -41,6 +34,11 @@ export function ProjectsPage() {
   }, [])
 
   useEffect(loadProjects, [loadProjects])
+
+  useEffect(() => {
+    window.addEventListener('projects:changed', loadProjects)
+    return () => window.removeEventListener('projects:changed', loadProjects)
+  }, [loadProjects])
 
   useEffect(() => {
     if (expandedProjectId === null) return
@@ -74,31 +72,9 @@ export function ProjectsPage() {
     return projects.filter((project) => `${project.projectname || ''} ${project.introduction || ''}`.toLowerCase().includes(keyword))
   }, [projects, query])
 
-  function closeModal() {
-    setSearchParams({}, { replace: true })
-    setSubmitError('')
-  }
-
-  async function handleCreate(event: FormEvent) {
-    event.preventDefault()
-    setSubmitting(true)
-    setSubmitError('')
-    try {
-      const project = await api.createProject(name.trim(), introduction.trim())
-      setProjects((current) => [project, ...current])
-      setName('')
-      setIntroduction('')
-      closeModal()
-    } catch (reason) {
-      setSubmitError(reason instanceof Error ? reason.message : '创建失败，请稍后重试')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
   return (
     <div className="page">
-      <header className="page-header"><div><p className="eyebrow">作品管理</p><h1>我的作品</h1><p>集中查看小说项目与创作进度。</p></div><div className="header-actions"><Link className="secondary-button" to="/recycle-bin"><Trash2 size={17} />回收站</Link><button className="primary-button" onClick={() => setSearchParams({ create: '1' })}><Plus size={17} />新建作品</button></div></header>
+      <header className="page-header"><div><p className="eyebrow">作品管理</p><h1>我的作品</h1><p>集中查看小说项目与创作进度。</p></div><div className="header-actions"><button className="primary-button" onClick={() => navigate('/?create=1')}><Plus size={17} />新建作品</button></div></header>
 
       {notice && <div className="form-message success page-notice" role="status">{notice} <Link className="text-link" to="/recycle-bin">查看回收站</Link></div>}
 
@@ -110,16 +86,26 @@ export function ProjectsPage() {
       {error ? <div className="empty-state"><p>{error}</p><button className="secondary-button" onClick={loadProjects}>重新加载</button></div>
         : loading ? <div className="project-grid skeleton-grid"><span /><span /><span /></div>
         : filteredProjects.length === 0 ? (
-          <div className="empty-state"><BookOpenText size={32} /><h3>{query ? '没有匹配的作品' : '作品集还是空的'}</h3><p>{query ? '换一个关键词试试。' : '创建作品后，可在这里查看创作进度。'}</p>{!query && <button className="primary-button" onClick={() => setSearchParams({ create: '1' })}><Plus size={17} />新建作品</button>}</div>
+          <div className="empty-state"><BookOpenText size={32} /><h3>{query ? '没有匹配的作品' : '作品集还是空的'}</h3><p>{query ? '换一个关键词试试。' : '创建作品后，可在这里查看创作进度。'}</p></div>
         ) : (
           <div className="project-grid">
             {filteredProjects.map((project) => (
-              <article className="project-card" key={project.id}>
+              <article className="project-card project-card-clickable" key={project.id} role="link" tabIndex={0} aria-label={`查看${project.projectname || '未命名作品'}详情`} onClick={(event) => {
+                if ((event.target as HTMLElement).closest('button, a')) return
+                navigate(`/projects/${project.id}`)
+              }} onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) return
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  navigate(`/projects/${project.id}`)
+                }
+              }}>
                 <div className="project-card-top"><span className="project-monogram">{(project.projectname || '未').slice(0, 1)}</span><span className={`status-badge ${project.status === '完结' ? 'done' : project.status === '断更' ? 'paused' : ''}`}>{project.status || '连载中'}</span></div>
-                <h2>{project.projectname || '未命名作品'}</h2>
+                <h2><Link className="project-card-link" to={`/projects/${project.id}`}>{project.projectname || '未命名作品'}</Link></h2>
                 <p>{project.introduction || '尚未填写作品简介'}</p>
                 <div className="project-stats"><span><FileText size={15} />{project.chapter_count} 章</span><span>{numberFormat.format(project.total_words)} 字</span></div>
                 <div className="project-updated"><CalendarDays size={14} />更新于 {dateFormat.format(new Date(project.updated_at))}</div>
+                <Link className="chapter-toggle outline-toggle" to={`/projects/${project.id}/outline`}><BookOpenText size={15} />管理大纲</Link>
                 <button className="chapter-toggle" type="button" aria-expanded={expandedProjectId === project.id} aria-controls={`project-${project.id}-chapters`} onClick={() => void toggleChapters(project)}>
                   <FileText size={15} />管理章节（{project.chapter_count}）{expandedProjectId === project.id ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
                 </button>
@@ -139,14 +125,6 @@ export function ProjectsPage() {
           </div>
         )}
 
-      <Modal open={modalOpen} title="新建作品" onClose={closeModal}>
-        <form className="modal-body form-stack" onSubmit={handleCreate}>
-          <label className="field"><span>作品名称</span><input value={name} onChange={(event) => setName(event.target.value)} minLength={2} maxLength={20} placeholder="例如：雾港来信" autoFocus required /><small>{name.length}/20</small></label>
-          <label className="field"><span>作品简介</span><textarea value={introduction} onChange={(event) => setIntroduction(event.target.value)} maxLength={500} rows={5} placeholder="简要描述故事背景、主角或核心冲突" /><small>{introduction.length}/500</small></label>
-          {submitError && <div className="form-message error" role="alert">{submitError}</div>}
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={closeModal}>取消</button><button className="primary-button" type="submit" disabled={submitting}>{submitting ? '正在创建…' : '创建作品'}</button></div>
-        </form>
-      </Modal>
       <ProjectActionDialog project={recycleTarget} action="recycle" onClose={() => setRecycleTarget(null)} onSuccess={(project) => {
         setProjects((current) => current.filter((item) => item.id !== project.id))
         if (expandedProjectId === project.id) setExpandedProjectId(null)
