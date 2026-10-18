@@ -23,7 +23,12 @@ interface ProjectDraft {
 
 const DEFAULT_DRAFT_KEY = 'anonymous'
 
-export function ProjectCreationModal({ open, onClose, onCreated, draftKey = DEFAULT_DRAFT_KEY }: ProjectCreationModalProps) {
+export function ProjectCreationModal({
+  open,
+  onClose,
+  onCreated,
+  draftKey = DEFAULT_DRAFT_KEY,
+}: ProjectCreationModalProps) {
   const [name, setName] = useState('')
   const [introduction, setIntroduction] = useState('')
   const [projectType, setProjectType] = useState('')
@@ -116,36 +121,117 @@ export function ProjectCreationModal({ open, onClose, onCreated, draftKey = DEFA
   return (
     <Modal open={open} title="新建作品" onClose={close} busy={submitting || Boolean(generating)}>
       <form className="modal-body form-stack project-creation-form" onSubmit={handleSubmit}>
-        <p className="creation-intro"><Bot size={17} />填写作品设定，智能体可以协助你快速生成灵感。</p>
+        <p className="creation-intro">
+          <Bot size={17} />
+          填写作品设定，智能体可以协助你快速生成灵感。
+        </p>
         <label className="field">
           <span>作品名称</span>
           <span className="field-with-action">
-            <input value={name} onChange={(event) => setName(event.target.value)} minLength={2} maxLength={20} placeholder="例如：雾港来信" autoFocus required />
-            <button className="ai-field-button" type="button" onClick={() => void generate('projectname')} disabled={submitting || Boolean(generating)} aria-label="智能生成作品名称" title="智能生成作品名称"><Sparkles size={15} />智能生成</button>
+            <input
+              value={name}
+              onChange={event => setName(event.target.value)}
+              minLength={2}
+              maxLength={20}
+              placeholder="例如：雾港来信"
+              autoFocus
+              required
+            />
+            <button
+              className="ai-field-button"
+              type="button"
+              onClick={() => void generate('projectname')}
+              disabled={submitting || Boolean(generating)}
+              aria-label="智能生成作品名称"
+              title="智能生成作品名称"
+            >
+              <Sparkles size={15} />
+              智能生成
+            </button>
           </span>
           <small>{name.length}/20</small>
         </label>
         <label className="field">
           <span>作品类型</span>
           <span className="field-with-action">
-            <select value={projectType} onChange={(event) => setProjectType(event.target.value)} required>
+            <select value={projectType} onChange={event => setProjectType(event.target.value)} required>
               <option value="">请选择作品类型</option>
-              {projectTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+              {projectTypes.map(type => (
+                <option key={type} value={type}>
+                  {type}
+                </option>
+              ))}
             </select>
-            <button className="ai-field-button" type="button" onClick={() => void generate('project_type')} disabled={submitting || Boolean(generating)} aria-label="智能生成作品类型" title="智能生成作品类型"><Sparkles size={15} />智能生成</button>
+            <button
+              className="ai-field-button"
+              type="button"
+              onClick={() => void generate('project_type')}
+              disabled={submitting || Boolean(generating)}
+              aria-label="智能生成作品类型"
+              title="智能生成作品类型"
+            >
+              <Sparkles size={15} />
+              智能生成
+            </button>
           </span>
         </label>
         <label className="field">
           <span>作品简介</span>
           <span className="field-with-action textarea-with-action">
-            <textarea value={introduction} onChange={(event) => setIntroduction(event.target.value)} maxLength={500} rows={5} placeholder="简要描述故事背景、主角或核心冲突" />
-            <button className="ai-field-button" type="button" onClick={() => void generate('introduction')} disabled={submitting || Boolean(generating)} aria-label="智能生成作品简介" title="智能生成作品简介"><Sparkles size={15} />智能生成</button>
+            <textarea
+              value={introduction}
+              onChange={event => setIntroduction(event.target.value)}
+              maxLength={500}
+              rows={5}
+              placeholder="简要描述故事背景、主角或核心冲突"
+            />
+            <button
+              className="ai-field-button"
+              type="button"
+              onClick={() => void generate('introduction')}
+              disabled={submitting || Boolean(generating)}
+              aria-label="智能生成作品简介"
+              title="智能生成作品简介"
+            >
+              <Sparkles size={15} />
+              智能生成
+            </button>
           </span>
           <small>{introduction.length}/500</small>
         </label>
-        {error && <div className="form-message error" role="alert">{error}</div>}
-        {draftNotice && <div className="form-message success" role="status">{draftNotice}</div>}
-        <div className="modal-actions"><button className="secondary-button" type="button" onClick={saveDraft} disabled={submitting || Boolean(generating)}><Save size={16} />保存草稿</button><button className="secondary-button" type="button" onClick={close} disabled={submitting || Boolean(generating)}>取消</button><button className="primary-button" type="submit" disabled={submitting || Boolean(generating)}><Plus size={17} />{submitting ? '正在创建…' : '创建作品'}</button></div>
+        {error && (
+          <div className="form-message error" role="alert">
+            {error}
+          </div>
+        )}
+        {draftNotice && (
+          <div className="form-message success" role="status">
+            {draftNotice}
+          </div>
+        )}
+        <div className="modal-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={saveDraft}
+            disabled={submitting || Boolean(generating)}
+          >
+            <Save size={16} />
+            保存草稿
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={close}
+            disabled={submitting || Boolean(generating)}
+          >
+            取消
+          </button>
+          <button className="primary-button" type="submit" disabled={submitting || Boolean(generating)}>
+            <Plus size={17} />
+            {submitting ? '正在创建…' : '创建作品'}
+          </button>
+        </div>
       </form>
     </Modal>
   )

@@ -22,7 +22,14 @@ export function Modal({ open, title, onClose, children, busy = false }: ModalPro
 
   return (
     <div className="modal-backdrop" onMouseDown={() => !busy && onClose()} role="presentation">
-      <section className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={busy} onMouseDown={(event) => event.stopPropagation()}>
+      <section
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-busy={busy}
+        onMouseDown={event => event.stopPropagation()}
+      >
         <div className="modal-header">
           <h2 id={titleId}>{title}</h2>
           <button className="icon-button" type="button" onClick={onClose} aria-label="关闭" disabled={busy}>

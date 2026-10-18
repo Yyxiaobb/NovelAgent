@@ -13,7 +13,13 @@ import { SettingsPage } from './pages/SettingsPage'
 
 function ProtectedRoute() {
   const { user, loading } = useAuth()
-  if (loading) return <div className="app-loading"><span className="loading-mark">墨</span><p>正在整理工作台…</p></div>
+  if (loading)
+    return (
+      <div className="app-loading">
+        <span className="loading-mark">墨</span>
+        <p>正在整理工作台…</p>
+      </div>
+    )
   return user ? <Outlet /> : <Navigate to="/auth" replace />
 }
 

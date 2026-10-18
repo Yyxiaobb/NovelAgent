@@ -3,10 +3,13 @@ import { api, tokenStore } from './client'
 
 beforeEach(() => {
   tokenStore.set('test-token')
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-    ok: true,
-    json: async () => ({ code: 200, data: null }),
-  }))
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: null }),
+    }),
+  )
 })
 
 afterEach(() => {

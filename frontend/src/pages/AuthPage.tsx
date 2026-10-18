@@ -41,10 +41,17 @@ export function AuthPage() {
   return (
     <main className="auth-page">
       <section className="auth-intro">
-        <div className="auth-brand"><BookOpen size={22} /><span>墨笺</span></div>
+        <div className="auth-brand">
+          <BookOpen size={22} />
+          <span>墨笺</span>
+        </div>
         <div className="auth-statement">
           <Feather size={30} />
-          <h1>让每一个故事<br />都有落笔之处</h1>
+          <h1>
+            让每一个故事
+            <br />
+            都有落笔之处
+          </h1>
           <p>整理作品，记录进度，把注意力留给真正重要的文字。</p>
         </div>
         <small>Novel workspace · 2026</small>
@@ -53,8 +60,16 @@ export function AuthPage() {
       <section className="auth-form-side">
         <div className="auth-form-wrap">
           <div className="segmented-control" aria-label="账户操作">
-            <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => changeMode('login')}>登录</button>
-            <button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => changeMode('register')}>注册</button>
+            <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => changeMode('login')}>
+              登录
+            </button>
+            <button
+              type="button"
+              className={mode === 'register' ? 'active' : ''}
+              onClick={() => changeMode('register')}
+            >
+              注册
+            </button>
           </div>
           <div className="auth-heading">
             <h2>{mode === 'login' ? '欢迎回来' : '创建写作账户'}</h2>
@@ -63,13 +78,35 @@ export function AuthPage() {
           <form className="form-stack" onSubmit={handleSubmit}>
             <label className="field">
               <span>用户名</span>
-              <input value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={50} placeholder="请输入用户名" autoComplete="username" required />
+              <input
+                value={username}
+                onChange={event => setUsername(event.target.value)}
+                minLength={3}
+                maxLength={50}
+                placeholder="请输入用户名"
+                autoComplete="username"
+                required
+              />
             </label>
             <label className="field">
               <span>密码</span>
               <span className="input-with-action">
-                <input type={showPassword ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)} minLength={mode === 'login' ? 5 : 6} maxLength={128} placeholder="请输入密码" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required />
-                <button type="button" className="input-action" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? '隐藏密码' : '显示密码'}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={event => setPassword(event.target.value)}
+                  minLength={mode === 'login' ? 5 : 6}
+                  maxLength={128}
+                  placeholder="请输入密码"
+                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                  required
+                />
+                <button
+                  type="button"
+                  className="input-action"
+                  onClick={() => setShowPassword(value => !value)}
+                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                >
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </span>
@@ -77,10 +114,23 @@ export function AuthPage() {
             {mode === 'register' && (
               <label className="field">
                 <span>确认密码</span>
-                <input type={showPassword ? 'text' : 'password'} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={6} maxLength={128} placeholder="再次输入密码" autoComplete="new-password" required />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={confirmPassword}
+                  onChange={event => setConfirmPassword(event.target.value)}
+                  minLength={6}
+                  maxLength={128}
+                  placeholder="再次输入密码"
+                  autoComplete="new-password"
+                  required
+                />
               </label>
             )}
-            {error && <div className="form-message error" role="alert">{error}</div>}
+            {error && (
+              <div className="form-message error" role="alert">
+                {error}
+              </div>
+            )}
             <button className="primary-button full-width" type="submit" disabled={submitting}>
               {submitting ? '正在处理…' : mode === 'login' ? '进入工作台' : '创建账户'}
             </button>

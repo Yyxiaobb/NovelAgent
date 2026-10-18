@@ -22,7 +22,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false)
       return
     }
-    api.getProfile()
+    api
+      .getProfile()
       .then(setUser)
       .catch(() => tokenStore.clear())
       .finally(() => setLoading(false))
@@ -52,14 +53,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return updatedUser
   }
 
-  const value = useMemo<AuthContextValue>(() => ({
-    user,
-    loading,
-    login: (username, password) => authenticate('login', username, password),
-    register: (username, password) => authenticate('register', username, password),
-    logout,
-    updateProfile,
-  }), [user, loading])
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user,
+      loading,
+      login: (username, password) => authenticate('login', username, password),
+      register: (username, password) => authenticate('register', username, password),
+      logout,
+      updateProfile,
+    }),
+    [user, loading],
+  )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

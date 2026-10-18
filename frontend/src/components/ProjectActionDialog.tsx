@@ -56,15 +56,30 @@ export function ProjectActionDialog({ project, action, onClose, onSuccess }: Pro
           <Icon size={23} aria-hidden="true" />
           <div>
             <strong>{project?.projectname || '未命名作品'}</strong>
-            <p>{action === 'recycle' ? '作品将从作品列表中移除，章节会保留，可随时在回收站还原。'
-              : action === 'restore' ? '作品将回到作品列表，并恢复移入回收站前的状态。此前单独删除的章节仍留在回收站，需单独还原。早期删除的作品默认还原为连载中。'
-              : '作品及其全部章节将被永久删除。此操作无法撤销，也无法再次还原，请确认后继续。'}</p>
+            <p>
+              {action === 'recycle'
+                ? '作品将从作品列表中移除，章节会保留，可随时在回收站还原。'
+                : action === 'restore'
+                  ? '作品将回到作品列表，并恢复移入回收站前的状态。此前单独删除的章节仍留在回收站，需单独还原。早期删除的作品默认还原为连载中。'
+                  : '作品及其全部章节将被永久删除。此操作无法撤销，也无法再次还原，请确认后继续。'}
+            </p>
           </div>
         </div>
-        {error && <div className="form-message error" role="alert">{error}</div>}
+        {error && (
+          <div className="form-message error" role="alert">
+            {error}
+          </div>
+        )}
         <div className="modal-actions">
-          <button className="secondary-button" type="button" onClick={closeDialog} disabled={submitting}>取消</button>
-          <button className={action === 'delete' ? 'primary-button destructive-button' : 'primary-button'} type="button" onClick={() => void handleConfirm()} disabled={submitting}>
+          <button className="secondary-button" type="button" onClick={closeDialog} disabled={submitting}>
+            取消
+          </button>
+          <button
+            className={action === 'delete' ? 'primary-button destructive-button' : 'primary-button'}
+            type="button"
+            onClick={() => void handleConfirm()}
+            disabled={submitting}
+          >
             {submitting ? pendingLabel : confirm}
           </button>
         </div>

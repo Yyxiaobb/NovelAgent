@@ -143,7 +143,11 @@ describe('回收站页面', () => {
 
   it('请求待处理时锁定确认和取消，避免重复提交', async () => {
     let resolveRestore!: (value: Project) => void
-    vi.mocked(api.restoreProject).mockReturnValueOnce(new Promise((resolve) => { resolveRestore = resolve }))
+    vi.mocked(api.restoreProject).mockReturnValueOnce(
+      new Promise(resolve => {
+        resolveRestore = resolve
+      }),
+    )
     const user = userEvent.setup()
     renderPage()
 
@@ -197,7 +201,11 @@ describe('回收站页面', () => {
 
   it('覆盖层外点击可取消操作，但提交期间不会关闭', async () => {
     let resolveRestore!: (value: Project) => void
-    vi.mocked(api.restoreProject).mockReturnValueOnce(new Promise((resolve) => { resolveRestore = resolve }))
+    vi.mocked(api.restoreProject).mockReturnValueOnce(
+      new Promise(resolve => {
+        resolveRestore = resolve
+      }),
+    )
     const user = userEvent.setup()
     renderPage()
     await user.click(await screen.findByRole('button', { name: '还原雾港来信' }))
@@ -270,7 +278,9 @@ describe('章节管理与回收站', () => {
 
   it('章节加载失败可重试', async () => {
     vi.mocked(api.getProjects).mockResolvedValue([novel])
-    vi.mocked(api.getProjectChapters).mockRejectedValueOnce(new Error('章节暂时不可用')).mockResolvedValueOnce([chapter])
+    vi.mocked(api.getProjectChapters)
+      .mockRejectedValueOnce(new Error('章节暂时不可用'))
+      .mockResolvedValueOnce([chapter])
     renderPage('/projects')
     await userEvent.click(await screen.findByRole('button', { name: '管理章节（3）' }))
     expectText(await screen.findByRole('alert'), '章节暂时不可用')
@@ -281,15 +291,24 @@ describe('章节管理与回收站', () => {
 
   it('切换作品后忽略旧章节请求结果', async () => {
     let resolveFirst!: (value: Chapter[]) => void
-    vi.mocked(api.getProjects).mockResolvedValue([novel, { ...novel, id: 8, projectname: '第二部作品', chapter_count: 1 }])
+    vi.mocked(api.getProjects).mockResolvedValue([
+      novel,
+      { ...novel, id: 8, projectname: '第二部作品', chapter_count: 1 },
+    ])
     vi.mocked(api.getProjectChapters)
-      .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+      .mockReturnValueOnce(
+        new Promise(resolve => {
+          resolveFirst = resolve
+        }),
+      )
       .mockResolvedValueOnce([{ ...chapter, id: 22, project_id: 8, chaptername: '另一封信' }])
     renderPage('/projects')
     await userEvent.click(await screen.findByRole('button', { name: '管理章节（3）' }))
     await userEvent.click(screen.getByRole('button', { name: '管理章节（1）' }))
     expect(await screen.findByText('另一封信')).toBeTruthy()
-    await act(async () => { resolveFirst([chapter]) })
+    await act(async () => {
+      resolveFirst([chapter])
+    })
     expect(screen.getByText('另一封信')).toBeTruthy()
     expect(screen.queryByText('迟来的信')).toBeNull()
   })
@@ -377,7 +396,11 @@ describe('章节管理与回收站', () => {
   it('章节还原期间禁止取消和重复提交', async () => {
     let resolveRestore!: (value: Chapter) => void
     vi.mocked(api.getRecycledChapters).mockResolvedValue([chapter])
-    vi.mocked(api.restoreChapter).mockReturnValueOnce(new Promise((resolve) => { resolveRestore = resolve }))
+    vi.mocked(api.restoreChapter).mockReturnValueOnce(
+      new Promise(resolve => {
+        resolveRestore = resolve
+      }),
+    )
     renderPage()
     await screen.findByRole('button', { name: '还原雾港来信' })
     await userEvent.click(screen.getByRole('tab', { name: '章节 1' }))
@@ -389,7 +412,9 @@ describe('章节管理与回收站', () => {
     fireEvent.mouseDown(dialog.parentElement!)
     expect(screen.getByRole('dialog')).toBeTruthy()
     expect(api.restoreChapter).toHaveBeenCalledTimes(1)
-    await act(async () => { resolveRestore(chapter) })
+    await act(async () => {
+      resolveRestore(chapter)
+    })
     expectText(await screen.findByRole('status'), '已还原')
   })
 })

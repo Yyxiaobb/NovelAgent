@@ -7,7 +7,9 @@ import { AppShell } from '../components/AppShell'
 import { DashboardPage } from './DashboardPage'
 import { ProjectsPage } from './ProjectsPage'
 
-vi.mock('../api/client', () => ({ api: { getProjects: vi.fn(), createProject: vi.fn(), generateProjectField: vi.fn() } }))
+vi.mock('../api/client', () => ({
+  api: { getProjects: vi.fn(), createProject: vi.fn(), generateProjectField: vi.fn() },
+}))
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: { username: 'writer', nickname: '创作者' }, logout: vi.fn() }),
 }))
@@ -93,7 +95,9 @@ describe('新建作品入口', () => {
     )
 
     const dialog = await screen.findByRole('dialog', { name: '新建作品' })
-    const fields = Array.from(dialog.querySelectorAll('label.field')).map((field) => field.querySelector(':scope > span:first-child')?.textContent)
+    const fields = Array.from(dialog.querySelectorAll('label.field')).map(
+      field => field.querySelector(':scope > span:first-child')?.textContent,
+    )
     expect(fields).toEqual(['作品名称', '作品类型', '作品简介'])
   })
 
@@ -111,7 +115,10 @@ describe('新建作品入口', () => {
     let dialog = await screen.findByRole('dialog', { name: '新建作品' })
     await userEvent.type(within(dialog).getByPlaceholderText('例如：雾港来信'), '星河归途')
     await userEvent.selectOptions(within(dialog).getByRole('combobox'), '科幻')
-    await userEvent.type(within(dialog).getByPlaceholderText('简要描述故事背景、主角或核心冲突'), '一支探险队在深空寻找失落的家园。')
+    await userEvent.type(
+      within(dialog).getByPlaceholderText('简要描述故事背景、主角或核心冲突'),
+      '一支探险队在深空寻找失落的家园。',
+    )
     await userEvent.click(within(dialog).getByRole('button', { name: '保存草稿' }))
     expect((await within(dialog).findByRole('status')).textContent).toContain('草稿已保存')
     expect(JSON.parse(localStorage.getItem('novel-agent-project-draft:anonymous') || '{}')).toEqual({

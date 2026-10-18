@@ -48,8 +48,15 @@ beforeEach(() => {
   vi.mocked(api.getProject).mockResolvedValue(project)
   vi.mocked(api.getProjectChapters).mockResolvedValue([chapter])
   vi.mocked(api.updateProject).mockResolvedValue(project)
-  vi.mocked(api.generateProjectOutline).mockResolvedValue({ project_id: project.id, expected_words: 120000, outline: '第一卷：星海启程\n第二卷：归途之战' })
-  vi.mocked(api.updateProjectOutline).mockResolvedValue({ project_id: project.id, outline: '第一卷：星海启程\n第二卷：归途之战' })
+  vi.mocked(api.generateProjectOutline).mockResolvedValue({
+    project_id: project.id,
+    expected_words: 120000,
+    outline: '第一卷：星海启程\n第二卷：归途之战',
+  })
+  vi.mocked(api.updateProjectOutline).mockResolvedValue({
+    project_id: project.id,
+    outline: '第一卷：星海启程\n第二卷：归途之战',
+  })
   vi.mocked(api.createChapter).mockResolvedValue({ ...chapter, id: 9, chapter_number: 2, chaptername: '归途' })
   vi.mocked(api.updateChapter).mockResolvedValue(chapter)
 })
@@ -98,7 +105,14 @@ describe('作品详情页', () => {
   })
 
   it('编辑模式可以保存作品信息', async () => {
-    const updated = { ...project, projectname: '星河新篇', introduction: '新的简介', project_type: '悬疑', cover_url: 'https://example.com/new-cover.jpg', status: '完结' }
+    const updated = {
+      ...project,
+      projectname: '星河新篇',
+      introduction: '新的简介',
+      project_type: '悬疑',
+      cover_url: 'https://example.com/new-cover.jpg',
+      status: '完结',
+    }
     vi.mocked(api.updateProject).mockResolvedValue(updated)
     renderPage()
 
@@ -142,7 +156,11 @@ describe('作品详情页', () => {
     await userEvent.clear(screen.getByLabelText('启航名称'))
     await userEvent.type(screen.getByLabelText('启航名称'), '启航（修订）')
     await userEvent.click(screen.getAllByRole('button', { name: '保存章节' })[0])
-    expect(api.updateChapter).toHaveBeenCalledWith(project.id, chapter.id, { chapter_number: 1, chaptername: '启航（修订）', content: '' })
+    expect(api.updateChapter).toHaveBeenCalledWith(project.id, chapter.id, {
+      chapter_number: 1,
+      chaptername: '启航（修订）',
+      content: '',
+    })
     expect(await screen.findByRole('button', { name: '修改' })).toBeTruthy()
   })
 })

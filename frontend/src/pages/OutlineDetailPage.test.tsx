@@ -6,25 +6,49 @@ import { api } from '../api/client'
 import { OutlineDetailPage } from './OutlineDetailPage'
 
 vi.mock('../api/client', () => ({
-  api: { getProjectOutline: vi.fn(), updateProjectOutline: vi.fn(), getProject: vi.fn(), generateProjectOutline: vi.fn(), getOutlineVersions: vi.fn() },
+  api: {
+    getProjectOutline: vi.fn(),
+    updateProjectOutline: vi.fn(),
+    getProject: vi.fn(),
+    generateProjectOutline: vi.fn(),
+    getOutlineVersions: vi.fn(),
+  },
 }))
 
 beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(api.getProjectOutline).mockResolvedValue({ project_id: 12, outline: '旧大纲' })
-  vi.mocked(api.getProject).mockResolvedValue({ id: 12, projectname: '星河归途', introduction: '', project_type: '科幻', total_words: 0, chapter_count: 0, created_at: '2026-10-17T09:00:00', updated_at: '2026-10-17T10:00:00', status: '连载中' })
+  vi.mocked(api.getProject).mockResolvedValue({
+    id: 12,
+    projectname: '星河归途',
+    introduction: '',
+    project_type: '科幻',
+    total_words: 0,
+    chapter_count: 0,
+    created_at: '2026-10-17T09:00:00',
+    updated_at: '2026-10-17T10:00:00',
+    status: '连载中',
+  })
   vi.mocked(api.updateProjectOutline).mockResolvedValue({ project_id: 12, outline: '新大纲' })
-  vi.mocked(api.generateProjectOutline).mockResolvedValue({ project_id: 12, expected_words: 150000, outline: '智能生成的大纲' })
+  vi.mocked(api.generateProjectOutline).mockResolvedValue({
+    project_id: 12,
+    expected_words: 150000,
+    outline: '智能生成的大纲',
+  })
   vi.mocked(api.getOutlineVersions).mockResolvedValue([])
 })
 afterEach(cleanup)
 
 describe('大纲详情页', () => {
   function renderOutline(initialEntry = '/projects/12/outline') {
-    return render(<MemoryRouter initialEntries={[initialEntry]}><Routes>
-      <Route path="/projects/:projectId/outline" element={<OutlineDetailPage />} />
-      <Route path="/projects/:projectId/outline/:feature" element={<OutlineDetailPage />} />
-    </Routes></MemoryRouter>)
+    return render(
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/projects/:projectId/outline" element={<OutlineDetailPage />} />
+          <Route path="/projects/:projectId/outline/:feature" element={<OutlineDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
   }
 
   it('可以保存大纲并退出编辑模式留在当前页', async () => {

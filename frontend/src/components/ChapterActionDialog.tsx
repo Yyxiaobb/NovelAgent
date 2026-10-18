@@ -60,15 +60,30 @@ export function ChapterActionDialog({ chapter, action, onClose, onSuccess }: Cha
           <Icon size={23} aria-hidden="true" />
           <div>
             <strong>{chapterTitle(chapter)}</strong>
-            <p>{action === 'recycle' ? '本章会从作品章节列表中移除，章节数据保留，可在回收站单独还原。'
-              : action === 'restore' ? '本章会以原有编号回到所属作品的章节列表。'
-              : '本章数据将被永久删除。此操作无法撤销，请确认后继续。'}</p>
+            <p>
+              {action === 'recycle'
+                ? '本章会从作品章节列表中移除，章节数据保留，可在回收站单独还原。'
+                : action === 'restore'
+                  ? '本章会以原有编号回到所属作品的章节列表。'
+                  : '本章数据将被永久删除。此操作无法撤销，请确认后继续。'}
+            </p>
           </div>
         </div>
-        {error && <div className="form-message error" role="alert">{error}</div>}
+        {error && (
+          <div className="form-message error" role="alert">
+            {error}
+          </div>
+        )}
         <div className="modal-actions">
-          <button className="secondary-button" type="button" onClick={closeDialog} disabled={submitting}>取消</button>
-          <button className={action === 'delete' ? 'primary-button destructive-button' : 'primary-button'} type="button" onClick={() => void handleConfirm()} disabled={submitting}>
+          <button className="secondary-button" type="button" onClick={closeDialog} disabled={submitting}>
+            取消
+          </button>
+          <button
+            className={action === 'delete' ? 'primary-button destructive-button' : 'primary-button'}
+            type="button"
+            onClick={() => void handleConfirm()}
+            disabled={submitting}
+          >
             {submitting ? pendingLabel : confirm}
           </button>
         </div>
