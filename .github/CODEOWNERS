@@ -1,0 +1,7 @@
+# Default reviewer for all changes in the repository.
+* @Yyxiaobb
+
+# Keep CI and dependency changes under explicit ownership.
+/.github/ @Yyxiaobb
+/frontend/ @Yyxiaobb
+/agent/ @Yyxiaobb
