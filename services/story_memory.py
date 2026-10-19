@@ -150,3 +150,40 @@ def build_project_memory_context(
     if not lines:
         return "当前章节没有匹配到手动整理的长期记忆"
     return "\n".join(lines)[:max_chars]
+
+
+def find_memory_conflicts(entries: Iterable, *, threshold: float = 0.35) -> list[dict]:
+    """Find likely duplicate or conflicting facts within one memory category."""
+    items = list(entries)
+    conflicts: list[dict] = []
+    for index, first in enumerate(items):
+        first_title = (first.title or "").strip().lower()
+        first_terms = _terms(" ".join((first.title or "", first.content or "")))
+        first_keywords = {str(value).strip().lower() for value in (first.keywords or []) if str(value).strip()}
+        for second in items[index + 1:]:
+            if first.category != second.category:
+                continue
+            second_title = (second.title or "").strip().lower()
+            second_terms = _terms(" ".join((second.title or "", second.content or "")))
+            second_keywords = {str(value).strip().lower() for value in (second.keywords or []) if str(value).strip()}
+            reason = None
+            similarity = 0.0
+            if first_title and first_title == second_title:
+                reason, similarity = "same_title", 1.0
+            elif first_keywords & second_keywords:
+                reason, similarity = "shared_keywords", 0.7
+            else:
+                union = first_terms | second_terms
+                overlap = first_terms & second_terms
+                similarity = len(overlap) / len(union) if union else 0.0
+                if similarity >= threshold:
+                    reason = "similar_content"
+            if reason:
+                conflicts.append({
+                    "first_id": first.id,
+                    "second_id": second.id,
+                    "category": first.category,
+                    "similarity": round(similarity, 3),
+                    "reason": reason,
+                })
+    return sorted(conflicts, key=lambda item: (-item["similarity"], item["first_id"], item["second_id"]))

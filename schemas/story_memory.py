@@ -35,3 +35,16 @@ class StoryMemoryInfo(BaseModel):
 
 class StoryMemoryReviewRequest(BaseModel):
     decision: Literal["approved", "rejected"]
+
+
+class StoryMemoryBatchReviewRequest(BaseModel):
+    memory_ids: list[int] = Field(..., min_length=1, max_length=100)
+    decision: Literal["approved", "rejected"]
+
+
+class StoryMemoryConflictInfo(BaseModel):
+    first_id: int
+    second_id: int
+    category: MemoryCategory
+    similarity: float
+    reason: Literal["same_title", "shared_keywords", "similar_content"]

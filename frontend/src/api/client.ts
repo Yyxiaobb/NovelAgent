@@ -11,6 +11,7 @@ import type {
   Project,
   RecycledChapter,
   StoryMemoryEntry,
+  StoryMemoryConflict,
   StoryMemoryPayload,
   User,
 } from '../types'
@@ -131,6 +132,8 @@ export const api = {
   getProjects: () => request<Project[]>('/api/project/projects'),
   getProject: (projectId: number) => request<Project>(`/api/project/detail/${projectId}`),
   getProjectMemories: (projectId: number) => request<StoryMemoryEntry[]>(`/api/project/${projectId}/memories`),
+  getProjectMemoryConflicts: (projectId: number) =>
+    request<StoryMemoryConflict[]>(`/api/project/${projectId}/memories/conflicts`),
   createProjectMemory: (projectId: number, payload: StoryMemoryPayload) =>
     request<StoryMemoryEntry>(`/api/project/${projectId}/memories`, {
       method: 'POST',
@@ -147,6 +150,11 @@ export const api = {
     request<StoryMemoryEntry>(`/api/project/${projectId}/memories/${memoryId}/review`, {
       method: 'POST',
       body: JSON.stringify({ decision }),
+    }),
+  batchReviewProjectMemories: (projectId: number, memoryIds: number[], decision: 'approved' | 'rejected') =>
+    request<StoryMemoryEntry[]>(`/api/project/${projectId}/memories/batch-review`, {
+      method: 'POST',
+      body: JSON.stringify({ memory_ids: memoryIds, decision }),
     }),
   exportProject: async (projectId: number, format: 'markdown' | 'txt'): Promise<Blob> => {
     const token = localStorage.getItem(TOKEN_KEY)

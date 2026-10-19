@@ -2,7 +2,14 @@ import { ArrowLeft, BookOpenText, Check, Plus, Save, Trash2, X } from 'lucide-re
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api/client'
-import type { Chapter, Project, StoryMemoryCategory, StoryMemoryEntry, StoryMemoryPayload } from '../types'
+import type {
+  Chapter,
+  Project,
+  StoryMemoryCategory,
+  StoryMemoryConflict,
+  StoryMemoryEntry,
+  StoryMemoryPayload,
+} from '../types'
 
 const categories: Array<{ value: StoryMemoryCategory; label: string }> = [
   { value: 'character', label: '人物档案' },
@@ -25,6 +32,8 @@ export function StoryMemoryPage() {
   const id = Number(projectId)
   const [project, setProject] = useState<Project | null>(null)
   const [entries, setEntries] = useState<StoryMemoryEntry[]>([])
+  const [conflicts, setConflicts] = useState<StoryMemoryConflict[]>([])
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [chapters, setChapters] = useState<Chapter[]>([])
   const [draft, setDraft] = useState<StoryMemoryPayload>(emptyDraft())
   const [keywordText, setKeywordText] = useState('')
@@ -43,14 +52,17 @@ export function StoryMemoryPage() {
     setLoading(true)
     setError('')
     try {
-      const [detail, memories, chapterList] = await Promise.all([
+      const [detail, memories, chapterList, conflictList] = await Promise.all([
         api.getProject(id),
         api.getProjectMemories(id),
         api.getProjectChapters(id),
+        api.getProjectMemoryConflicts(id),
       ])
       setProject(detail)
       setEntries(memories)
       setChapters(chapterList)
+      setConflicts(conflictList)
+      setSelectedIds([])
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '长期记忆加载失败')
     } finally {
@@ -139,6 +151,27 @@ export function StoryMemoryPage() {
       setNotice(decision === 'approved' ? '记忆已审核并加入后续生成上下文' : '已拒绝该记忆建议')
     } catch (reason) {
       setNotice(reason instanceof Error ? reason.message : '审核失败，请稍后重试')
+    }
+  }
+
+  const pendingEntries = entries.filter(entry => entry.review_status === 'pending')
+
+  function toggleSelected(memoryId: number) {
+    setSelectedIds(current =>
+      current.includes(memoryId) ? current.filter(idValue => idValue !== memoryId) : [...current, memoryId],
+    )
+  }
+
+  async function batchReview(decision: 'approved' | 'rejected') {
+    if (selectedIds.length === 0) return
+    try {
+      const reviewed = await api.batchReviewProjectMemories(id, selectedIds, decision)
+      const reviewedById = new Map(reviewed.map(item => [item.id, item]))
+      setEntries(current => current.map(item => reviewedById.get(item.id) || item))
+      setSelectedIds([])
+      setNotice(decision === 'approved' ? `已通过 ${reviewed.length} 条记忆` : `已拒绝 ${reviewed.length} 条记忆`)
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '批量审核失败，请稍后重试')
     }
   }
 
@@ -285,7 +318,57 @@ export function StoryMemoryPage() {
             <h2>已整理的记忆</h2>
             <p>{entries.length} 条资料 · 停用的条目不会进入生成上下文</p>
           </div>
+          {pendingEntries.length > 0 && (
+            <div className="story-memory-batch-actions">
+              <button
+                className="text-link"
+                type="button"
+                onClick={() =>
+                  setSelectedIds(
+                    selectedIds.length === pendingEntries.length ? [] : pendingEntries.map(item => item.id),
+                  )
+                }
+              >
+                {selectedIds.length === pendingEntries.length ? '取消全选' : `全选待审核（${pendingEntries.length}）`}
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void batchReview('rejected')}
+                disabled={selectedIds.length === 0}
+              >
+                批量拒绝
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => void batchReview('approved')}
+                disabled={selectedIds.length === 0}
+              >
+                批量通过
+              </button>
+            </div>
+          )}
         </div>
+        {conflicts.length > 0 && (
+          <div className="story-memory-conflicts" role="status">
+            <strong>发现 {conflicts.length} 组可能重复或冲突的记忆</strong>
+            {conflicts.slice(0, 8).map(conflict => {
+              const first = entries.find(entry => entry.id === conflict.first_id)
+              const second = entries.find(entry => entry.id === conflict.second_id)
+              return (
+                <p key={`${conflict.first_id}-${conflict.second_id}`}>
+                  {first?.title || conflict.first_id} ↔ {second?.title || conflict.second_id} ·{' '}
+                  {conflict.reason === 'same_title'
+                    ? '名称相同'
+                    : conflict.reason === 'shared_keywords'
+                      ? '关键词重叠'
+                      : '内容相似'}
+                </p>
+              )
+            })}
+          </div>
+        )}
         {entries.length === 0 ? (
           <div className="empty-state">
             <BookOpenText size={30} />
@@ -298,6 +381,14 @@ export function StoryMemoryPage() {
               <article className={`story-memory-entry${entry.is_active ? '' : ' is-inactive'}`} key={entry.id}>
                 <div className="story-memory-entry-heading">
                   <div>
+                    {entry.review_status === 'pending' && (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(entry.id)}
+                        onChange={() => toggleSelected(entry.id)}
+                        aria-label={`选择${entry.title}`}
+                      />
+                    )}
                     <span className="memory-updated-label">
                       {categories.find(item => item.value === entry.category)?.label}
                     </span>

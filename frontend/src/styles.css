@@ -340,6 +340,10 @@ h1, h2, h3, p { margin-top: 0; }
 .story-memory-wide { grid-column: 1 / -1; }
 .story-memory-active { display: flex; align-items: center; gap: 9px; margin: 2px 0 14px; color: var(--muted); font-size: 13px; }
 .story-memory-actions { justify-content: flex-end; }
+.story-memory-batch-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
+.story-memory-conflicts { margin: 0 0 16px; padding: 12px 14px; color: #76521e; background: #fbf1db; border: 1px solid #ecd9ae; border-radius: 6px; font-size: 12px; }
+.story-memory-conflicts strong { display: block; margin-bottom: 6px; }
+.story-memory-conflicts p { margin: 4px 0 0; }
 .story-memory-entry-list { display: grid; gap: 12px; }
 .story-memory-entry { padding: 16px 18px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
 .story-memory-entry.is-inactive { opacity: .68; }

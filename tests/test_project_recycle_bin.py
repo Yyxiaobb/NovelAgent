@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from config import db_conf
 from config.db_conf import Base, get_db
 from models.projects import Chapter, Project
+from models.story_memory import StoryMemory
 from models.users import User, UserToken
 from routers.projects import router
 from routers import agent, recycle_bin, story_memory
@@ -259,6 +260,41 @@ class ProjectEditingTests(RecycleBinTestCase):
         deleted = await self.client.delete(f"/api/project/{project_id}/memories/{memory_id}")
         self.assertEqual(deleted.status_code, 200)
         self.assertEqual((await self.client.get(f"/api/project/{project_id}/memories")).json()["data"], [])
+
+    async def test_story_memory_batch_review_and_conflict_detection(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            chapter = (await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).one()
+            chapter_id = chapter.id
+
+        payloads = [
+            {"category": "character", "title": "沈砚", "content": "沈砚在北境寻找信使。", "keywords": ["沈砚", "北境"]},
+            {"category": "character", "title": "沈砚", "content": "沈砚在北境保护信使。", "keywords": ["沈砚", "北境"]},
+        ]
+        ids = []
+        for payload in payloads:
+            payload["source_chapter_id"] = chapter_id
+            response = await self.client.post(f"/api/project/{project_id}/memories", json=payload)
+            self.assertEqual(response.status_code, 200)
+            ids.append(response.json()["data"]["id"])
+
+        conflicts = await self.client.get(f"/api/project/{project_id}/memories/conflicts")
+        self.assertEqual(conflicts.status_code, 200)
+        self.assertEqual(conflicts.json()["data"][0]["reason"], "same_title")
+
+        for memory_id in ids:
+            async with self.sessions() as session:
+                memory = await session.get(StoryMemory, memory_id)
+                memory.origin = "chapter_extract"
+                memory.review_status = "pending"
+                memory.is_active = False
+                await session.commit()
+        batch = await self.client.post(
+            f"/api/project/{project_id}/memories/batch-review",
+            json={"memory_ids": ids, "decision": "approved"},
+        )
+        self.assertEqual(batch.status_code, 200)
+        self.assertTrue(all(item["is_active"] for item in batch.json()["data"]))
 
     async def test_project_exports_markdown_and_txt_with_only_active_chapters(self):
         project_id = await self.seed_project(chapter_count=2)

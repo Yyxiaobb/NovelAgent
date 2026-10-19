@@ -6,7 +6,14 @@ from config.db_conf import get_db
 from crud import story_memory as memory_crud
 from crud import projects
 from models.users import User
-from schemas.story_memory import StoryMemoryInfo, StoryMemoryRequest, StoryMemoryReviewRequest
+from schemas.story_memory import (
+    StoryMemoryBatchReviewRequest,
+    StoryMemoryConflictInfo,
+    StoryMemoryInfo,
+    StoryMemoryRequest,
+    StoryMemoryReviewRequest,
+)
+from services.story_memory import find_memory_conflicts
 from utils.auth import get_current_user
 from utils.response import success_response
 
@@ -24,6 +31,22 @@ async def list_memories(
     if memories is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品不存在或不可访问")
     return success_response(message="获取长期记忆成功", data=[StoryMemoryInfo.model_validate(item) for item in memories])
+
+
+@router.get("/conflicts")
+async def list_memory_conflicts(
+    project_id: int = Path(..., gt=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    memories = await memory_crud.list_project_memories(db, project_id, user.id)
+    if memories is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品不存在或不可访问")
+    conflicts = find_memory_conflicts(memories)
+    return success_response(
+        message="获取记忆冲突提示成功",
+        data=[StoryMemoryConflictInfo.model_validate(item) for item in conflicts],
+    )
 
 
 @router.post("")
@@ -93,3 +116,25 @@ async def review_memory(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有待审核的章节提取记忆可以审核")
     reviewed = await memory_crud.review_project_memory(db, memory, payload.decision)
     return success_response(message="长期记忆审核完成", data=StoryMemoryInfo.model_validate(reviewed))
+
+
+@router.post("/batch-review")
+async def batch_review_memories(
+    payload: StoryMemoryBatchReviewRequest,
+    project_id: int = Path(..., gt=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    memories = await memory_crud.list_project_memories(db, project_id, user.id)
+    if memories is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品不存在或不可访问")
+    selected = [item for item in memories if item.id in set(payload.memory_ids)]
+    if len(selected) != len(set(payload.memory_ids)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="部分长期记忆不存在或不可访问")
+    if any(item.origin != "chapter_extract" or item.review_status != "pending" for item in selected):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="批量审核只支持待审核的章节提取记忆")
+    reviewed = await memory_crud.review_project_memories(db, selected, payload.decision)
+    return success_response(
+        message="长期记忆批量审核完成",
+        data=[StoryMemoryInfo.model_validate(item) for item in reviewed],
+    )

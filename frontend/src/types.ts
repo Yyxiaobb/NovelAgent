@@ -85,6 +85,14 @@ export interface StoryMemoryPayload {
   is_active: boolean
 }
 
+export interface StoryMemoryConflict {
+  first_id: number
+  second_id: number
+  category: StoryMemoryCategory
+  similarity: number
+  reason: 'same_title' | 'shared_keywords' | 'similar_content'
+}
+
 export interface GenerationJob {
   job_id: string
   project_id: number

@@ -118,3 +118,15 @@ async def review_project_memory(db: AsyncSession, memory: StoryMemory, decision:
     await db.commit()
     await db.refresh(memory)
     return memory
+
+
+async def review_project_memories(
+    db: AsyncSession, memories: list[StoryMemory], decision: str,
+) -> list[StoryMemory]:
+    for memory in memories:
+        memory.review_status = decision
+        memory.is_active = decision == "approved"
+    await db.commit()
+    for memory in memories:
+        await db.refresh(memory)
+    return memories
