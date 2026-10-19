@@ -344,6 +344,11 @@ h1, h2, h3, p { margin-top: 0; }
 .story-memory-conflicts { margin: 0 0 16px; padding: 12px 14px; color: #76521e; background: #fbf1db; border: 1px solid #ecd9ae; border-radius: 6px; font-size: 12px; }
 .story-memory-conflicts strong { display: block; margin-bottom: 6px; }
 .story-memory-conflicts p { margin: 4px 0 0; }
+.story-memory-merge-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; padding: 12px; background: #eef3f0; border-radius: 6px; font-size: 12px; }
+.story-memory-merge-select { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; }
+.story-memory-event-list { display: grid; gap: 8px; }
+.story-memory-event { display: grid; grid-template-columns: 100px 1fr auto; align-items: center; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.story-memory-event span, .story-memory-event time { color: var(--muted); }
 .story-memory-entry-list { display: grid; gap: 12px; }
 .story-memory-entry { padding: 16px 18px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
 .story-memory-entry.is-inactive { opacity: .68; }

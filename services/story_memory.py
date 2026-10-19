@@ -157,10 +157,14 @@ def find_memory_conflicts(entries: Iterable, *, threshold: float = 0.35) -> list
     items = list(entries)
     conflicts: list[dict] = []
     for index, first in enumerate(items):
+        if getattr(first, "merged_into_id", None) is not None:
+            continue
         first_title = (first.title or "").strip().lower()
         first_terms = _terms(" ".join((first.title or "", first.content or "")))
         first_keywords = {str(value).strip().lower() for value in (first.keywords or []) if str(value).strip()}
         for second in items[index + 1:]:
+            if getattr(second, "merged_into_id", None) is not None:
+                continue
             if first.category != second.category:
                 continue
             second_title = (second.title or "").strip().lower()

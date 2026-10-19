@@ -9,7 +9,9 @@ from models.users import User
 from schemas.story_memory import (
     StoryMemoryBatchReviewRequest,
     StoryMemoryConflictInfo,
+    StoryMemoryEventInfo,
     StoryMemoryInfo,
+    StoryMemoryMergeRequest,
     StoryMemoryRequest,
     StoryMemoryReviewRequest,
 )
@@ -47,6 +49,19 @@ async def list_memory_conflicts(
         message="获取记忆冲突提示成功",
         data=[StoryMemoryConflictInfo.model_validate(item) for item in conflicts],
     )
+
+
+@router.get("/events")
+async def list_memory_events(
+    project_id: int = Path(..., gt=0),
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    events = await memory_crud.list_project_memory_events(db, project_id, user.id, limit=limit)
+    if events is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品不存在或不可访问")
+    return success_response(message="获取记忆操作记录成功", data=[StoryMemoryEventInfo.model_validate(item) for item in events])
 
 
 @router.post("")
@@ -114,7 +129,7 @@ async def review_memory(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="长期记忆不存在或不可访问")
     if memory.origin != "chapter_extract" or memory.review_status != "pending":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有待审核的章节提取记忆可以审核")
-    reviewed = await memory_crud.review_project_memory(db, memory, payload.decision)
+    reviewed = await memory_crud.review_project_memory(db, memory, payload.decision, actor_user_id=user.id)
     return success_response(message="长期记忆审核完成", data=StoryMemoryInfo.model_validate(reviewed))
 
 
@@ -133,8 +148,36 @@ async def batch_review_memories(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="部分长期记忆不存在或不可访问")
     if any(item.origin != "chapter_extract" or item.review_status != "pending" for item in selected):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="批量审核只支持待审核的章节提取记忆")
-    reviewed = await memory_crud.review_project_memories(db, selected, payload.decision)
+    reviewed = await memory_crud.review_project_memories(db, selected, payload.decision, actor_user_id=user.id)
     return success_response(
         message="长期记忆批量审核完成",
         data=[StoryMemoryInfo.model_validate(item) for item in reviewed],
     )
+
+
+@router.post("/merge")
+async def merge_memories(
+    payload: StoryMemoryMergeRequest,
+    project_id: int = Path(..., gt=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    memories = await memory_crud.list_project_memories(db, project_id, user.id)
+    if memories is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品不存在或不可访问")
+    source_ids = list(dict.fromkeys(payload.source_ids))
+    if payload.target_id in source_ids:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="合并目标不能同时作为来源条目")
+    by_id = {memory.id: memory for memory in memories}
+    if payload.target_id not in by_id or any(memory_id not in by_id for memory_id in source_ids):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="部分长期记忆不存在或不可访问")
+    target = by_id[payload.target_id]
+    sources = [by_id[memory_id] for memory_id in source_ids]
+    if any(memory.category != target.category for memory in sources):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="只能合并同一类型的长期记忆")
+    if any(memory.merged_into_id is not None for memory in [target, *sources]):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="已合并的记忆不能再次作为合并对象")
+    merged, _ = await memory_crud.merge_project_memories(
+        db, project_id=project_id, actor_user_id=user.id, target=target, sources=sources,
+    )
+    return success_response(message="长期记忆已合并", data=StoryMemoryInfo.model_validate(merged))

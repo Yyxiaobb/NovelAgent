@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from config import db_conf
 from config.db_conf import Base, get_db
 from models.projects import Chapter, Project
-from models.story_memory import StoryMemory
+from models.story_memory import StoryMemory, StoryMemoryEvent
 from models.users import User, UserToken
 from routers.projects import router
 from routers import agent, recycle_bin, story_memory
@@ -295,6 +295,31 @@ class ProjectEditingTests(RecycleBinTestCase):
         )
         self.assertEqual(batch.status_code, 200)
         self.assertTrue(all(item["is_active"] for item in batch.json()["data"]))
+
+    async def test_story_memory_merge_keeps_target_and_records_audit_event(self):
+        project_id = await self.seed_project(chapter_count=1)
+        payloads = [
+            {"category": "world", "title": "北境", "content": "北境常年风雪。", "keywords": ["北境", "风雪"]},
+            {"category": "world", "title": "北境规则补充", "content": "北境的关隘在冬季关闭。", "keywords": ["北境", "关隘"]},
+        ]
+        ids = []
+        for payload in payloads:
+            response = await self.client.post(f"/api/project/{project_id}/memories", json=payload)
+            ids.append(response.json()["data"]["id"])
+        merged = await self.client.post(
+            f"/api/project/{project_id}/memories/merge",
+            json={"target_id": ids[0], "source_ids": [ids[1]]},
+        )
+        self.assertEqual(merged.status_code, 200)
+        self.assertIn("关隘", merged.json()["data"]["content"])
+        async with self.sessions() as session:
+            source = await session.get(StoryMemory, ids[1])
+            event = (await session.scalars(select(StoryMemoryEvent).where(StoryMemoryEvent.project_id == project_id))).one()
+            self.assertEqual(source.merged_into_id, ids[0])
+            self.assertEqual(event.event_type, "merge")
+        events = await self.client.get(f"/api/project/{project_id}/memories/events")
+        self.assertEqual(events.status_code, 200)
+        self.assertEqual(events.json()["data"][0]["event_type"], "merge")
 
     async def test_project_exports_markdown_and_txt_with_only_active_chapters(self):
         project_id = await self.seed_project(chapter_count=2)

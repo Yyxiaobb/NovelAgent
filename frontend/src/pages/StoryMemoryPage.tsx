@@ -8,6 +8,7 @@ import type {
   StoryMemoryCategory,
   StoryMemoryConflict,
   StoryMemoryEntry,
+  StoryMemoryEvent,
   StoryMemoryPayload,
 } from '../types'
 
@@ -34,6 +35,8 @@ export function StoryMemoryPage() {
   const [entries, setEntries] = useState<StoryMemoryEntry[]>([])
   const [conflicts, setConflicts] = useState<StoryMemoryConflict[]>([])
   const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [mergeIds, setMergeIds] = useState<number[]>([])
+  const [events, setEvents] = useState<StoryMemoryEvent[]>([])
   const [chapters, setChapters] = useState<Chapter[]>([])
   const [draft, setDraft] = useState<StoryMemoryPayload>(emptyDraft())
   const [keywordText, setKeywordText] = useState('')
@@ -52,16 +55,18 @@ export function StoryMemoryPage() {
     setLoading(true)
     setError('')
     try {
-      const [detail, memories, chapterList, conflictList] = await Promise.all([
+      const [detail, memories, chapterList, conflictList, eventList] = await Promise.all([
         api.getProject(id),
         api.getProjectMemories(id),
         api.getProjectChapters(id),
         api.getProjectMemoryConflicts(id),
+        api.getProjectMemoryEvents(id),
       ])
       setProject(detail)
       setEntries(memories)
       setChapters(chapterList)
       setConflicts(conflictList)
+      setEvents(eventList)
       setSelectedIds([])
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '长期记忆加载失败')
@@ -148,6 +153,7 @@ export function StoryMemoryPage() {
     try {
       const updated = await api.reviewProjectMemory(id, entry.id, decision)
       setEntries(current => current.map(item => (item.id === updated.id ? updated : item)))
+      setEvents(await api.getProjectMemoryEvents(id))
       setNotice(decision === 'approved' ? '记忆已审核并加入后续生成上下文' : '已拒绝该记忆建议')
     } catch (reason) {
       setNotice(reason instanceof Error ? reason.message : '审核失败，请稍后重试')
@@ -169,9 +175,31 @@ export function StoryMemoryPage() {
       const reviewedById = new Map(reviewed.map(item => [item.id, item]))
       setEntries(current => current.map(item => reviewedById.get(item.id) || item))
       setSelectedIds([])
+      setEvents(await api.getProjectMemoryEvents(id))
       setNotice(decision === 'approved' ? `已通过 ${reviewed.length} 条记忆` : `已拒绝 ${reviewed.length} 条记忆`)
     } catch (reason) {
       setNotice(reason instanceof Error ? reason.message : '批量审核失败，请稍后重试')
+    }
+  }
+
+  async function mergeSelected(targetId: number) {
+    const sourceIds = mergeIds.filter(memoryId => memoryId !== targetId)
+    if (sourceIds.length === 0) return
+    try {
+      const merged = await api.mergeProjectMemories(id, targetId, sourceIds)
+      setEntries(current =>
+        current.map(item => {
+          if (item.id === merged.id) return merged
+          if (sourceIds.includes(item.id))
+            return { ...item, is_active: false, review_status: 'rejected', merged_into_id: merged.id }
+          return item
+        }),
+      )
+      setMergeIds([])
+      setNotice(`已将 ${sourceIds.length + 1} 条记忆合并到“${merged.title}”`)
+      setEvents(await api.getProjectMemoryEvents(id))
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '合并失败，请稍后重试')
     }
   }
 
@@ -369,6 +397,27 @@ export function StoryMemoryPage() {
             })}
           </div>
         )}
+        {mergeIds.length >= 2 && (
+          <div className="story-memory-merge-bar">
+            <span>已选 {mergeIds.length} 条同类记忆，选择保留为主条目的目标：</span>
+            {mergeIds.map(memoryId => {
+              const entry = entries.find(item => item.id === memoryId)
+              return entry ? (
+                <button
+                  className="secondary-button"
+                  key={memoryId}
+                  type="button"
+                  onClick={() => void mergeSelected(memoryId)}
+                >
+                  合并到「{entry.title}」
+                </button>
+              ) : null
+            })}
+            <button className="text-link" type="button" onClick={() => setMergeIds([])}>
+              取消
+            </button>
+          </div>
+        )}
         {entries.length === 0 ? (
           <div className="empty-state">
             <BookOpenText size={30} />
@@ -416,6 +465,23 @@ export function StoryMemoryPage() {
                     <button className="text-link" type="button" onClick={() => beginEdit(entry)}>
                       编辑
                     </button>
+                    {entry.merged_into_id == null && (
+                      <label className="story-memory-merge-select">
+                        <input
+                          type="checkbox"
+                          checked={mergeIds.includes(entry.id)}
+                          onChange={() =>
+                            setMergeIds(current =>
+                              current.includes(entry.id)
+                                ? current.filter(idValue => idValue !== entry.id)
+                                : [...current, entry.id],
+                            )
+                          }
+                          aria-label={`选择${entry.title}参与合并`}
+                        />
+                        合并
+                      </label>
+                    )}
                     <button
                       className="text-link danger-link"
                       type="button"
@@ -429,6 +495,47 @@ export function StoryMemoryPage() {
                 <p>{entry.content}</p>
                 {entry.keywords.length > 0 && <small>关键词：{entry.keywords.join('、')}</small>}
                 {!entry.is_active && <small>已停用</small>}
+                {entry.merged_into_id != null && (
+                  <small>
+                    已合并到：
+                    {entries.find(item => item.id === entry.merged_into_id)?.title || `记忆 #${entry.merged_into_id}`}
+                  </small>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+      <section className="content-section story-memory-list">
+        <div className="section-heading">
+          <div>
+            <h2>操作记录</h2>
+            <p>最近 {events.length} 条审核与合并操作</p>
+          </div>
+        </div>
+        {events.length === 0 ? (
+          <p className="chapter-plan-empty">暂无操作记录。</p>
+        ) : (
+          <div className="story-memory-event-list">
+            {events.map(event => (
+              <article className="story-memory-event" key={event.id}>
+                <strong>
+                  {event.event_type === 'merge'
+                    ? '合并记忆'
+                    : event.event_type === 'batch_review'
+                      ? '批量审核'
+                      : '审核记忆'}
+                </strong>
+                <span>
+                  {event.event_type === 'merge'
+                    ? `保留 #${event.memory_id}，合并来源 ${event.related_memory_ids.map(idValue => `#${idValue}`).join('、')}`
+                    : `条目 ${event.related_memory_ids.length ? event.related_memory_ids.map(idValue => `#${idValue}`).join('、') : `#${event.memory_id}`} · ${String(event.details.decision || '')}`}
+                </span>
+                <time>
+                  {new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' }).format(
+                    new Date(event.created_at),
+                  )}
+                </time>
               </article>
             ))}
           </div>

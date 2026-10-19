@@ -27,6 +27,7 @@ class StoryMemoryInfo(BaseModel):
     is_active: bool
     review_status: Literal["pending", "approved", "rejected"]
     origin: Literal["manual", "chapter_extract"]
+    merged_into_id: int | None
     created_at: datetime
     updated_at: datetime
 
@@ -48,3 +49,21 @@ class StoryMemoryConflictInfo(BaseModel):
     category: MemoryCategory
     similarity: float
     reason: Literal["same_title", "shared_keywords", "similar_content"]
+
+
+class StoryMemoryMergeRequest(BaseModel):
+    target_id: int = Field(..., gt=0)
+    source_ids: list[int] = Field(..., min_length=1, max_length=30)
+
+
+class StoryMemoryEventInfo(BaseModel):
+    id: int
+    project_id: int
+    actor_user_id: int
+    event_type: Literal["review", "batch_review", "merge"]
+    memory_id: int | None
+    related_memory_ids: list[int]
+    details: dict
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

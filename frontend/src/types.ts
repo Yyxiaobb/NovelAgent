@@ -72,6 +72,7 @@ export interface StoryMemoryEntry {
   is_active: boolean
   review_status: 'pending' | 'approved' | 'rejected'
   origin: 'manual' | 'chapter_extract'
+  merged_into_id: number | null
   created_at: string
   updated_at: string
 }
@@ -91,6 +92,17 @@ export interface StoryMemoryConflict {
   category: StoryMemoryCategory
   similarity: number
   reason: 'same_title' | 'shared_keywords' | 'similar_content'
+}
+
+export interface StoryMemoryEvent {
+  id: number
+  project_id: number
+  actor_user_id: number
+  event_type: 'review' | 'batch_review' | 'merge'
+  memory_id: number | null
+  related_memory_ids: number[]
+  details: Record<string, unknown>
+  created_at: string
 }
 
 export interface GenerationJob {

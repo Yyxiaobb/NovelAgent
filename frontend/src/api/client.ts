@@ -11,6 +11,7 @@ import type {
   Project,
   RecycledChapter,
   StoryMemoryEntry,
+  StoryMemoryEvent,
   StoryMemoryConflict,
   StoryMemoryPayload,
   User,
@@ -134,6 +135,8 @@ export const api = {
   getProjectMemories: (projectId: number) => request<StoryMemoryEntry[]>(`/api/project/${projectId}/memories`),
   getProjectMemoryConflicts: (projectId: number) =>
     request<StoryMemoryConflict[]>(`/api/project/${projectId}/memories/conflicts`),
+  getProjectMemoryEvents: (projectId: number, limit = 50) =>
+    request<StoryMemoryEvent[]>(`/api/project/${projectId}/memories/events?limit=${limit}`),
   createProjectMemory: (projectId: number, payload: StoryMemoryPayload) =>
     request<StoryMemoryEntry>(`/api/project/${projectId}/memories`, {
       method: 'POST',
@@ -155,6 +158,11 @@ export const api = {
     request<StoryMemoryEntry[]>(`/api/project/${projectId}/memories/batch-review`, {
       method: 'POST',
       body: JSON.stringify({ memory_ids: memoryIds, decision }),
+    }),
+  mergeProjectMemories: (projectId: number, targetId: number, sourceIds: number[]) =>
+    request<StoryMemoryEntry>(`/api/project/${projectId}/memories/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ target_id: targetId, source_ids: sourceIds }),
     }),
   exportProject: async (projectId: number, format: 'markdown' | 'txt'): Promise<Blob> => {
     const token = localStorage.getItem(TOKEN_KEY)

@@ -71,7 +71,8 @@ def upgrade() -> None:
     try:
         # Later versioned tables are intentionally excluded from the baseline;
         # their dedicated revisions create them in order.
-        baseline_tables = [table for table in Base.metadata.sorted_tables if table.name != "story_memories"]
+        later_tables = {"story_memories", "story_memory_events"}
+        baseline_tables = [table for table in Base.metadata.sorted_tables if table.name not in later_tables]
         Base.metadata.create_all(bind=bind, tables=baseline_tables)
     finally:
         if numbering_constraint is not None:

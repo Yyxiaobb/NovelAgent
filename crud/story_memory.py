@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crud.projects import get_project
-from models.story_memory import StoryMemory
+from models.story_memory import StoryMemory, StoryMemoryEvent
 
 
 async def list_project_memories(db: AsyncSession, project_id: int, user_id: int) -> list[StoryMemory] | None:
@@ -112,21 +112,105 @@ async def sync_extracted_memories(
     await db.commit()
 
 
-async def review_project_memory(db: AsyncSession, memory: StoryMemory, decision: str) -> StoryMemory:
+async def review_project_memory(
+    db: AsyncSession, memory: StoryMemory, decision: str, *, actor_user_id: int,
+) -> StoryMemory:
+    previous = {"review_status": memory.review_status, "is_active": memory.is_active}
     memory.review_status = decision
     memory.is_active = decision == "approved"
+    db.add(StoryMemoryEvent(
+        project_id=memory.project_id,
+        actor_user_id=actor_user_id,
+        event_type="review",
+        memory_id=memory.id,
+        related_memory_ids=[],
+        details={"decision": decision, "previous": previous},
+    ))
     await db.commit()
     await db.refresh(memory)
     return memory
 
 
 async def review_project_memories(
-    db: AsyncSession, memories: list[StoryMemory], decision: str,
+    db: AsyncSession, memories: list[StoryMemory], decision: str, *, actor_user_id: int,
 ) -> list[StoryMemory]:
+    previous = {
+        str(memory.id): {"review_status": memory.review_status, "is_active": memory.is_active}
+        for memory in memories
+    }
     for memory in memories:
         memory.review_status = decision
         memory.is_active = decision == "approved"
+    if memories:
+        db.add(StoryMemoryEvent(
+            project_id=memories[0].project_id,
+            actor_user_id=actor_user_id,
+            event_type="batch_review",
+            memory_id=None,
+            related_memory_ids=[memory.id for memory in memories],
+            details={"decision": decision, "previous": previous},
+        ))
     await db.commit()
     for memory in memories:
         await db.refresh(memory)
     return memories
+
+
+async def list_project_memory_events(
+    db: AsyncSession, project_id: int, user_id: int, *, limit: int = 50,
+) -> list[StoryMemoryEvent] | None:
+    if await get_project(db, project_id, user_id) is None:
+        return None
+    result = await db.scalars(
+        select(StoryMemoryEvent)
+        .where(StoryMemoryEvent.project_id == project_id)
+        .order_by(StoryMemoryEvent.created_at.desc(), StoryMemoryEvent.id.desc())
+        .limit(max(1, min(limit, 100)))
+    )
+    return list(result.all())
+
+
+async def merge_project_memories(
+    db: AsyncSession,
+    *,
+    project_id: int,
+    actor_user_id: int,
+    target: StoryMemory,
+    sources: list[StoryMemory],
+) -> tuple[StoryMemory, list[StoryMemory]]:
+    source_ids = [memory.id for memory in sources]
+    before = {
+        "target": {"content": target.content, "keywords": target.keywords or [], "is_active": target.is_active},
+        "sources": {
+            str(memory.id): {"content": memory.content, "keywords": memory.keywords or []}
+            for memory in sources
+        },
+    }
+    additions = [memory.content.strip() for memory in sources if memory.content.strip()]
+    if additions:
+        target.content = f"{target.content.strip()}\n\n合并补充：" + "；".join(additions)
+    target.keywords = list(dict.fromkeys([*(target.keywords or []), *(keyword for memory in sources for keyword in (memory.keywords or []))]))
+    if target.source_chapter_id is None:
+        target.source_chapter_id = next((memory.source_chapter_id for memory in sources if memory.source_chapter_id), None)
+    if any(memory.review_status == "pending" for memory in [target, *sources]):
+        target.review_status = "pending"
+        target.is_active = False
+    target.origin = "chapter_extract" if any(memory.origin == "chapter_extract" for memory in [target, *sources]) else "manual"
+    for memory in sources:
+        memory.merged_into_id = target.id
+        memory.is_active = False
+        memory.review_status = "rejected"
+    db.add(StoryMemoryEvent(
+        project_id=project_id,
+        actor_user_id=actor_user_id,
+        event_type="merge",
+        memory_id=target.id,
+        related_memory_ids=source_ids,
+        details={
+            "before": before,
+            "after": {"content": target.content, "keywords": target.keywords or [], "review_status": target.review_status},
+        },
+    ))
+    await db.commit()
+    await db.refresh(target)
+    return target, sources
