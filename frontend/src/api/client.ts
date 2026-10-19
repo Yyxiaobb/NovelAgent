@@ -10,6 +10,8 @@ import type {
   ProfilePayload,
   Project,
   RecycledChapter,
+  StoryMemoryEntry,
+  StoryMemoryPayload,
   User,
 } from '../types'
 
@@ -128,6 +130,35 @@ export const api = {
   logout: () => request<null>('/api/user/logout', { method: 'POST' }),
   getProjects: () => request<Project[]>('/api/project/projects'),
   getProject: (projectId: number) => request<Project>(`/api/project/detail/${projectId}`),
+  getProjectMemories: (projectId: number) => request<StoryMemoryEntry[]>(`/api/project/${projectId}/memories`),
+  createProjectMemory: (projectId: number, payload: StoryMemoryPayload) =>
+    request<StoryMemoryEntry>(`/api/project/${projectId}/memories`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateProjectMemory: (projectId: number, memoryId: number, payload: StoryMemoryPayload) =>
+    request<StoryMemoryEntry>(`/api/project/${projectId}/memories/${memoryId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  deleteProjectMemory: (projectId: number, memoryId: number) =>
+    request<{ id: number }>(`/api/project/${projectId}/memories/${memoryId}`, { method: 'DELETE' }),
+  exportProject: async (projectId: number, format: 'markdown' | 'txt'): Promise<Blob> => {
+    const token = localStorage.getItem(TOKEN_KEY)
+    const headers = new Headers()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    let response: Response
+    try {
+      response = await fetch(`/api/project/${projectId}/export/${format}`, { headers, credentials: 'include' })
+    } catch {
+      throw new ApiError('无法连接服务器，请确认后端服务已启动')
+    }
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new ApiError(errorMessage(payload), response.status)
+    }
+    return response.blob()
+  },
   getProjectChapters: (projectId: number) => request<Chapter[]>(`/api/project/${projectId}/chapters`),
   getProjectOutline: (projectId: number) =>
     request<{ project_id: number; outline: string | null }>(`/api/project/${projectId}/outline`),

@@ -1,13 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import agent, projects, recycle_bin, users
+from routers import agent, projects, recycle_bin, story_memory, users
 from config.db_conf import init_db, close_db
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    await agent.resume_content_jobs()
     yield
     await close_db()
 
@@ -26,6 +25,7 @@ app.include_router(users.router)
 app.include_router(recycle_bin.legacy_router)
 app.include_router(projects.router)
 app.include_router(agent.router)
+app.include_router(story_memory.router)
 app.include_router(recycle_bin.router)
 
 @app.get("/")

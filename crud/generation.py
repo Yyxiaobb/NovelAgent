@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.generation import GenerationJob
@@ -71,3 +71,35 @@ async def update_job(db: AsyncSession, job: GenerationJob, **values) -> Generati
     await db.commit()
     await db.refresh(job)
     return job
+
+
+async def complete_job_if_active(
+    db: AsyncSession,
+    job_id: str,
+    *,
+    output_content: str,
+    result: dict,
+) -> bool:
+    """Complete a job only if a concurrent cancel request did not win."""
+    statement = (
+        update(GenerationJob)
+        .where(GenerationJob.id == job_id, GenerationJob.status != "cancelled")
+        .values(
+            status="completed", progress=100, output_content=output_content,
+            result=result, finished_at=datetime.now(),
+        )
+    )
+    completed = await db.execute(statement)
+    await db.commit()
+    return completed.rowcount == 1
+
+
+async def start_job_if_active(db: AsyncSession, job_id: str) -> bool:
+    """Claim a queued job without reviving one already cancelled by its owner."""
+    started = await db.execute(
+        update(GenerationJob)
+        .where(GenerationJob.id == job_id, GenerationJob.status.in_(("queued", "running")))
+        .values(status="running", progress=5)
+    )
+    await db.commit()
+    return started.rowcount == 1

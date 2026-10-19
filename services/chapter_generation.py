@@ -3,15 +3,17 @@ import json
 from typing import Any, Callable
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agent import LLMConfigurationError, LLMError
 from crud import generation as generation_crud
 from crud import projects
+from crud import story_memory as story_memory_crud
 from models.generation import GenerationJob
 from schemas.agent import ChapterGenerationRequest
 from schemas.projects import ChapterPlan
-from services.story_memory import build_story_memory
+from services.story_memory import build_project_memory_context, build_story_memory
 
 
 async def build_context(db: AsyncSession, project_id: int, chapter_id: int, user_id: int, payload: ChapterGenerationRequest):
@@ -33,11 +35,18 @@ async def build_context(db: AsyncSession, project_id: int, chapter_id: int, user
         for item in prior_chapters if item.summary
     ) or "暂无已整理的前文摘要"
     story_memory = build_story_memory(memory_chapters)
+    project_memories = await story_memory_crud.list_active_project_memories(db, project.id)
+    memory_query = "\n".join((
+        chapter.chaptername or "", plan.objective, plan.conflict, plan.key_events,
+        plan.ending_hook, payload.user_idea or "",
+    ))
+    project_memory_context = build_project_memory_context(project_memories, memory_query)
     prompt = (
         "你是一名专业的中文小说作者，请依据作品设定创作指定章节正文。\n"
         f"作品名称：{project.projectname or '未命名作品'}\n作品类型：{project.project_type or '未指定'}\n"
         f"作品简介：{project.introduction or '未提供'}\n作品大纲：{project.outline or '暂未提供，请依据简介自然展开'}\n"
-        f"前文章节记忆（最近 5 章）：\n{prior_context}\n\n跨章节长期记忆：\n{story_memory}\n"
+        f"前文章节记忆（最近 5 章）：\n{prior_context}\n\n历史章节记忆：\n{story_memory}\n"
+        f"作品长期记忆（根据本章规划检索）：\n{project_memory_context}\n"
         f"章节规划：{plan.model_dump()}\n"
         f"用户补充想法：{payload.user_idea.strip() if payload.user_idea and payload.user_idea.strip() else '未提供'}\n"
         f"章节编号：第 {chapter.chapter_number} 章\n章节名称：{chapter.chaptername or '未命名章节'}\n"
@@ -62,11 +71,12 @@ async def run_content_job(
     try:
         async with session_factory() as db:
             job = await db.get(GenerationJob, job_id)
-            if job is None:
+            if job is None or job.status == "cancelled":
+                return
+            if not await generation_crud.start_job_if_active(db, job_id):
                 return
             payload = ChapterGenerationRequest.model_validate(job.input_payload or {})
             project, chapter, plan, prompt = await build_context(db, job.project_id, job.chapter_id, job.user_id, payload)
-            await generation_crud.update_job(db, job, status="running", progress=5)
             parts: list[str] = []
             last_persisted = asyncio.get_running_loop().time()
             async with client_factory() as client:
@@ -75,16 +85,20 @@ async def run_content_job(
                     {"role": "user", "content": prompt},
                 ], temperature=0.8, max_tokens=content_token_fn(plan.expected_words)):
                     parts.append(chunk)
+                    current_status = await db.scalar(
+                        select(GenerationJob.status).where(GenerationJob.id == job_id)
+                    )
+                    if current_status == "cancelled":
+                        return
                     job.output_content = "".join(parts)
                     job.progress = min(95, 5 + len(job.output_content) * 90 // max(1, plan.expected_words))
                     now = asyncio.get_running_loop().time()
                     if now - last_persisted >= 1:
                         await db.commit()
                         last_persisted = now
-            await generation_crud.update_job(
-                db, job, status="completed", progress=100,
+            await generation_crud.complete_job_if_active(
+                db, job_id, output_content="".join(parts),
                 result={"expected_words": plan.expected_words, "plan": plan.model_dump()},
-                output_content="".join(parts),
             )
     except asyncio.CancelledError:
         # The cancel endpoint owns the persisted terminal state. Re-raise so

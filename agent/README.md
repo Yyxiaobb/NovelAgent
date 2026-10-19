@@ -4,6 +4,26 @@
 
 ## 配置
 
+长篇章节正文任务通过 Redis + ARQ 在独立进程中执行。安装后端依赖时会一并安装 ARQ：
+
+```powershell
+python -m pip install -r requirements-dev.txt
+```
+
+在项目根目录 `.env` 配置 Redis 地址：
+
+```dotenv
+REDIS_URL=redis://localhost:6379/0
+```
+
+本地启动 Redis 后，分别启动 API 和 Worker；Worker 命令从项目根目录运行：
+
+```powershell
+python -m arq workers.generation.WorkerSettings
+```
+
+任务记录仍保存在数据库中，Worker 启动时会把未完成任务重新放入队列。队列短暂不可用时，新任务会明确失败并可在 Redis 恢复后重试。
+
 安装接入层依赖：
 
 ```powershell

@@ -59,6 +59,30 @@ export interface ChapterMemory {
   timeline: string
 }
 
+export type StoryMemoryCategory = 'character' | 'world' | 'thread' | 'timeline'
+
+export interface StoryMemoryEntry {
+  id: number
+  project_id: number
+  category: StoryMemoryCategory
+  title: string
+  content: string
+  keywords: string[]
+  source_chapter_id: number | null
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface StoryMemoryPayload {
+  category: StoryMemoryCategory
+  title: string
+  content: string
+  keywords: string[]
+  source_chapter_id: number | null
+  is_active: boolean
+}
+
 export interface GenerationJob {
   job_id: string
   project_id: number

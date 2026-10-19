@@ -14,7 +14,7 @@ from config.db_conf import Base, get_db
 from models.projects import Chapter, Project
 from models.users import User, UserToken
 from routers.projects import router
-from routers import agent, recycle_bin
+from routers import agent, recycle_bin, story_memory
 
 
 class RecycleBinTestCase(unittest.IsolatedAsyncioTestCase):
@@ -54,6 +54,7 @@ class RecycleBinTestCase(unittest.IsolatedAsyncioTestCase):
         app = FastAPI()
         app.include_router(router)
         app.include_router(agent.router)
+        app.include_router(story_memory.router)
         app.include_router(recycle_bin.router)
         app.include_router(recycle_bin.legacy_router)
         app.dependency_overrides[get_db] = test_db
@@ -210,6 +211,91 @@ class ProjectRecycleBinTests(RecycleBinTestCase):
 
 
 class ProjectEditingTests(RecycleBinTestCase):
+    async def test_story_memory_crud_is_project_scoped_and_used_for_generation(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            chapter = (await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).one()
+            chapter.chaptername = "北境来信"
+            chapter_id = chapter.id
+            await session.commit()
+
+        created = await self.client.post(
+            f"/api/project/{project_id}/memories",
+            json={
+                "category": "character", "title": "沈砚", "content": "沈砚答应护送信使前往北境。",
+                "keywords": ["沈砚", "信使", "北境"], "source_chapter_id": chapter_id,
+            },
+        )
+        self.assertEqual(created.status_code, 200)
+        memory_id = created.json()["data"]["id"]
+
+        listed = await self.client.get(f"/api/project/{project_id}/memories")
+        self.assertEqual(len(listed.json()["data"]), 1)
+        self.assertEqual(listed.json()["data"][0]["title"], "沈砚")
+
+        self.client.headers["Authorization"] = "Bearer other-token"
+        forbidden = await self.client.get(f"/api/project/{project_id}/memories")
+        self.assertEqual(forbidden.status_code, 404)
+        self.client.headers["Authorization"] = "Bearer owner-token"
+
+        with patch("routers.agent.LLMClient") as llm_class:
+            llm_class.return_value.__aenter__.return_value.achat = AsyncMock(return_value="风雪中的信使停下脚步。")
+            generated = await self.client.post(
+                f"/api/agent/projects/{project_id}/chapters/{chapter_id}/content",
+                json={"expected_words": 1800, "user_idea": "沈砚带信使沿北境小路前行"},
+            )
+        self.assertEqual(generated.status_code, 200)
+        prompt = llm_class.return_value.__aenter__.return_value.achat.await_args.args[0][1]["content"]
+        self.assertIn("沈砚答应护送信使前往北境", prompt)
+
+        updated = await self.client.put(
+            f"/api/project/{project_id}/memories/{memory_id}",
+            json={
+                "category": "character", "title": "沈砚", "content": "沈砚已将信使送抵北境。",
+                "keywords": ["沈砚", "北境"], "source_chapter_id": chapter_id, "is_active": False,
+            },
+        )
+        self.assertFalse(updated.json()["data"]["is_active"])
+        deleted = await self.client.delete(f"/api/project/{project_id}/memories/{memory_id}")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual((await self.client.get(f"/api/project/{project_id}/memories")).json()["data"], [])
+
+    async def test_project_exports_markdown_and_txt_with_only_active_chapters(self):
+        project_id = await self.seed_project(chapter_count=2)
+        async with self.sessions() as session:
+            project = await session.get(Project, project_id)
+            project.projectname = "风起山海"
+            project.project_type = "奇幻"
+            project.introduction = "少年踏上寻龙之旅。"
+            project.outline = "第一卷：山海初遇"
+            chapters = list((await session.scalars(
+                select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_number)
+            )).all())
+            chapters[0].chaptername = "初入山海"
+            chapters[0].content = "群山之外，少年抬头望见巨龙。"
+            chapters[1].chaptername = "已删除章节"
+            chapters[1].content = "这部分已经移入回收站。"
+            chapters[1].is_deleted = True
+            await session.commit()
+
+        markdown = await self.client.get(f"/api/project/{project_id}/export/markdown")
+        self.assertEqual(markdown.status_code, 200)
+        self.assertIn("filename*=UTF-8''", markdown.headers["content-disposition"])
+        self.assertIn("# 风起山海", markdown.text)
+        self.assertIn("## 故事大纲", markdown.text)
+        self.assertIn("### 第 1 章 初入山海", markdown.text)
+        self.assertNotIn("这部分已经移入回收站", markdown.text)
+
+        text_export = await self.client.get(f"/api/project/{project_id}/export/txt")
+        self.assertEqual(text_export.status_code, 200)
+        self.assertIn("%E9%A3%8E%E8%B5%B7%E5%B1%B1%E6%B5%B7.txt", text_export.headers["content-disposition"])
+        self.assertIn("第 1 章 初入山海", text_export.text)
+        self.assertNotIn("已删除章节", text_export.text)
+
+        self.client.headers["Authorization"] = "Bearer other-token"
+        forbidden = await self.client.get(f"/api/project/{project_id}/export/markdown")
+        self.assertEqual(forbidden.status_code, 404)
+
     async def test_project_and_chapter_saves_are_committed(self):
         project_id = await self.seed_project(chapter_count=1)
 

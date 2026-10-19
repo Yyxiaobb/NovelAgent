@@ -334,6 +334,21 @@ h1, h2, h3, p { margin-top: 0; }
 .project-detail-meta { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: auto; color: #5e665f; font-size: 13px; }
 .project-detail-meta span { display: inline-flex; align-items: center; gap: 5px; }
 .detail-edit-field { width: min(100%, 680px); display: flex; flex-direction: column; gap: 7px; margin-bottom: 12px; }
+.story-memory-editor, .story-memory-list { padding: 22px 24px; margin-bottom: 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; }
+.story-memory-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
+.story-memory-form .detail-edit-field { width: 100%; }
+.story-memory-wide { grid-column: 1 / -1; }
+.story-memory-active { display: flex; align-items: center; gap: 9px; margin: 2px 0 14px; color: var(--muted); font-size: 13px; }
+.story-memory-actions { justify-content: flex-end; }
+.story-memory-entry-list { display: grid; gap: 12px; }
+.story-memory-entry { padding: 16px 18px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.story-memory-entry.is-inactive { opacity: .68; }
+.story-memory-entry-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.story-memory-entry-heading h3 { display: inline-block; margin: 0 0 0 9px; font-size: 15px; }
+.story-memory-entry > p { margin: 12px 0; color: var(--ink); white-space: pre-wrap; line-height: 1.7; }
+.story-memory-entry small { display: block; margin-top: 6px; color: var(--muted); }
+.story-memory-entry-actions { display: flex; align-items: center; gap: 12px; }
+.danger-link { color: #a54c43; }
 .detail-edit-field > span, .detail-cover-input > span { color: #3d423e; font-size: 12px; font-weight: 650; }
 .detail-edit-field input, .detail-edit-field select, .detail-edit-field textarea, .detail-cover-input input { width: 100%; color: var(--ink); background: var(--surface); border: 1px solid #cfd2cd; border-radius: 6px; outline: none; }
 .detail-edit-field input, .detail-edit-field select { height: 42px; padding: 0 11px; }
@@ -519,6 +534,9 @@ h1, h2, h3, p { margin-top: 0; }
   .detail-chapter-row { padding: 11px 12px; }
   .chapter-detail-panel { padding: 20px 16px; }
   .outline-management-card { align-items: flex-start; flex-direction: column; padding: 18px; }
+  .story-memory-editor, .story-memory-list { padding: 18px; }
+  .story-memory-form { grid-template-columns: 1fr; }
+  .story-memory-wide { grid-column: auto; }
   .outline-management-actions { width: 100%; flex-direction: column; }
   .outline-management-actions .secondary-button, .outline-management-actions .primary-button { width: 100%; justify-content: center; }
   .outline-generation-dialog { padding: 18px; }

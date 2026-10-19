@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,6 +7,7 @@ from starlette import status
 
 from agent import LLMClient, LLMConfigurationError, LLMError, LLMRequestError
 from config.db_conf import AsyncSessionLocal, get_db
+from config.queue_conf import abort_content_job, enqueue_content_job
 from crud import projects
 from crud import generation as generation_crud
 from models.users import User
@@ -18,7 +18,7 @@ from schemas.agent import (
     OutlineGenerationRequest, OutlineGenerationResponse,
     ProjectFieldGenerationRequest, ProjectFieldGenerationResponse,
 )
-from schemas.projects import ChapterMemory, ChapterPlan
+from schemas.projects import ChapterMemory
 from utils.auth import get_current_user
 from utils.response import success_response
 from services.agent_generation import (
@@ -32,47 +32,16 @@ from services.agent_generation import (
 )
 from services.chapter_generation import (
     build_context,
-    run_content_job,
     sse,
 )
 
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
-_CONTENT_TASKS: dict[str, asyncio.Task] = {}
-
-
-def _schedule_content_job(job_id: str) -> None:
-    task = asyncio.create_task(
-        run_content_job(job_id, AsyncSessionLocal, _generation_client, _content_max_tokens)
-    )
-    _CONTENT_TASKS[job_id] = task
-    task.add_done_callback(lambda _task, task_id=job_id: _CONTENT_TASKS.pop(task_id, None))
-
 
 def _generation_client(*, timeout: float | None = None) -> LLMClient:
     """Interactive generation should fail fast instead of retrying a slow upstream call."""
     return LLMClient(max_retries=0, timeout=timeout)
-
-
-async def resume_content_jobs() -> None:
-    """Resume jobs interrupted by a process restart.
-
-    The generated text is persisted incrementally, while the provider stream
-    itself cannot be resumed. Restarting the job from its original payload is
-    therefore safer than leaving a permanently ``running`` record behind.
-    """
-    async with AsyncSessionLocal() as db:
-        pending = await generation_crud.list_pending_jobs(db)
-        for job in pending:
-            job.status = "queued"
-            # Keep any incrementally persisted text visible while the job is
-            # restarted; the worker will replace it as new chunks arrive.
-            job.progress = min(job.progress, 5)
-        if pending:
-            await db.commit()
-    for job in pending:
-        _schedule_content_job(job.id)
 
 
 def _prompt(payload: ProjectFieldGenerationRequest) -> str:
@@ -201,45 +170,7 @@ async def generate_chapter_content(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    project = await projects.get_project(db, project_id, user.id)
-    chapter = await projects.get_chapter(db, project_id, chapter_id, user.id)
-    if project is None or chapter is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品或章节不存在、已删除或不可访问")
-
-    plan = payload.plan or (ChapterPlan.model_validate(chapter.plan) if chapter.plan else ChapterPlan(
-        objective="推进本章故事并完成章节目标",
-        conflict="主角面对当前情节中的核心阻碍",
-        key_events="围绕作品大纲展开本章关键事件",
-        ending_hook="留下推动下一章的悬念",
-        expected_words=payload.expected_words or 3000,
-    ))
-    prior_chapters = await projects.get_prior_chapter_memories(db, project.id, chapter.chapter_number)
-    prior_context = "\n".join(
-        f"第 {item.chapter_number} 章《{item.chaptername or '未命名'}》摘要：{item.summary}\n"
-        f"人物状态：{(item.memory or {}).get('character_state', '未记录')}\n"
-        f"未解决线索：{(item.memory or {}).get('unresolved_threads', '未记录')}"
-        for item in prior_chapters if item.summary
-    ) or "暂无已整理的前文摘要"
-
-    prompt = (
-        "你是一名专业的中文小说作者，请依据作品设定创作指定章节正文。\n"
-        f"作品名称：{project.projectname or '未命名作品'}\n"
-        f"作品类型：{project.project_type or '未指定'}\n"
-        f"作品简介：{project.introduction or '未提供'}\n"
-        f"作品大纲：{project.outline or '暂未提供，请依据简介自然展开'}\n"
-        f"前文章节记忆：\n{prior_context}\n"
-        f"章节规划：{plan.model_dump()}\n"
-        f"用户补充想法：{payload.user_idea.strip() if payload.user_idea and payload.user_idea.strip() else '未提供'}\n"
-        f"章节编号：第 {chapter.chapter_number} 章\n"
-        f"章节名称：{chapter.chaptername or '未命名章节'}\n"
-        f"期望本章字数：约 {plan.expected_words} 字\n\n"
-        f"本章必须完成的目标：{plan.objective}\n"
-        f"本章核心冲突：{plan.conflict}\n"
-        f"关键情节：{plan.key_events}\n"
-        f"结尾钩子：{plan.ending_hook}\n\n"
-        "要求：承接大纲及前文设定，保持人物性格和叙事视角一致；本章应有明确场景、行动、冲突或推进，避免复述大纲；"
-        "结尾自然衔接后续情节。只输出小说正文，不要输出标题、写作说明或字数统计。"
-    )
+    project, chapter, plan, prompt = await build_context(db, project_id, chapter_id, user.id, payload)
     try:
         async with _generation_client() as client:
             content = (await client.achat([
@@ -317,7 +248,16 @@ async def start_chapter_content_job(
         db, job_id=job_id, user_id=user.id, project_id=project_id,
         chapter_id=chapter_id, payload=payload.model_dump(mode="json"),
     )
-    _schedule_content_job(job_id)
+    try:
+        await enqueue_content_job(job_id)
+    except Exception as error:
+        async with AsyncSessionLocal() as session:
+            job = await generation_crud.get_job(session, job_id, user.id)
+            if job:
+                await generation_crud.update_job(
+                    session, job, status="failed", error_message="后台队列暂时不可用，请检查 Redis 服务后重试",
+                )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="后台生成队列暂时不可用") from error
     return success_response(message="章节生成任务已创建", data={"job_id": job_id, "status": "queued", "progress": 0})
 
 
@@ -374,10 +314,11 @@ async def cancel_chapter_content_job(job_id: str, user: User = Depends(get_curre
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="生成任务不存在或已过期")
         if job.status in {"completed", "failed", "cancelled"}:
             return success_response(message="任务已经结束", data={"job_id": job.id, "status": job.status})
-        task = _CONTENT_TASKS.get(job_id)
-        if task and not task.done():
-            task.cancel()
         await generation_crud.update_job(db, job, status="cancelled", progress=job.progress)
+    try:
+        await abort_content_job(job_id)
+    except Exception as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="任务已标记取消，但队列服务暂时不可用") from error
     return success_response(message="生成任务已取消", data={"job_id": job_id, "status": "cancelled"})
 
 
@@ -397,7 +338,16 @@ async def retry_chapter_content_job(job_id: str, user: User = Depends(get_curren
             db, job_id=new_job_id, user_id=user.id, project_id=source.project_id,
             chapter_id=source.chapter_id, payload=payload.model_dump(mode="json"),
         )
-    _schedule_content_job(new_job_id)
+    try:
+        await enqueue_content_job(new_job_id)
+    except Exception as error:
+        async with AsyncSessionLocal() as db:
+            job = await generation_crud.get_job(db, new_job_id, user.id)
+            if job:
+                await generation_crud.update_job(
+                    db, job, status="failed", error_message="后台队列暂时不可用，请检查 Redis 服务后重试",
+                )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="后台生成队列暂时不可用") from error
     return success_response(message="已重新创建章节生成任务", data={
         "job_id": new_job_id, "source_job_id": source.id, "status": "queued", "progress": 0,
     })

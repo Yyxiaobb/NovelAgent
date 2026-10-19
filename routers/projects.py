@@ -1,4 +1,8 @@
+from typing import Literal
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
@@ -10,6 +14,7 @@ from models.users import User
 from schemas.projects import ChapterInfo, ChapterRequest, ChapterVersionInfo, OutlineInfo, OutlineRequest, OutlineVersionInfo, ProjectRequest, ProjectInfoBase
 from utils.auth import get_current_user
 from utils.response import success_response
+from services.project_export import render_project_export
 
 
 router = APIRouter(prefix="/api/project", tags=["projects"])
@@ -50,6 +55,30 @@ async def get_project_chapters(
 
     response = [ChapterInfo.model_validate(chapter) for chapter in chapter_list]
     return success_response(message="获取章节成功", data=response)
+
+
+@router.get("/{project_id}/export/{file_format}")
+async def export_project(
+    project_id: int = Path(..., gt=0),
+    file_format: Literal["markdown", "txt"] = Path(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    project = await projects.get_project(db, project_id, user.id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="项目不存在或已在回收站")
+    chapters = await projects.get_project_chapters(db, project_id, user.id)
+    content = render_project_export(project, chapters or [], file_format)
+    extension = "md" if file_format == "markdown" else "txt"
+    title = (project.projectname or "未命名作品").strip() or "未命名作品"
+    filename = f"{title}.{extension}"
+    disposition = f"attachment; filename=project-{project_id}.{extension}; filename*=UTF-8''{quote(filename)}"
+    media_type = "text/markdown" if file_format == "markdown" else "text/plain"
+    return Response(
+        content=content.encode("utf-8"),
+        media_type=f"{media_type}; charset=utf-8",
+        headers={"Content-Disposition": disposition},
+    )
 
 
 @router.get("/{project_id}/outline")

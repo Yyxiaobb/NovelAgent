@@ -1,4 +1,16 @@
-import { ArrowLeft, BookOpenText, CalendarDays, Check, Edit3, FileText, Plus, Save, Trash2, X } from 'lucide-react'
+import {
+  ArrowLeft,
+  BookOpenText,
+  CalendarDays,
+  Check,
+  Download,
+  Edit3,
+  FileText,
+  Plus,
+  Save,
+  Trash2,
+  X,
+} from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
@@ -42,6 +54,7 @@ export function ProjectDetailPage() {
   const [chapterSaving, setChapterSaving] = useState<number | null>(null)
   const [newChapter, setNewChapter] = useState<ChapterDraft | null>(null)
   const [newChapterSaving, setNewChapterSaving] = useState(false)
+  const [exportingFormat, setExportingFormat] = useState<'markdown' | 'txt' | null>(null)
   const [chapterToRecycle, setChapterToRecycle] = useState<Chapter | null>(null)
   const [recycleProjectOpen, setRecycleProjectOpen] = useState(false)
 
@@ -187,6 +200,32 @@ export function ProjectDetailPage() {
     }
   }
 
+  async function exportProject(format: 'markdown' | 'txt') {
+    if (!project) return
+    setExportingFormat(format)
+    setNotice('')
+    try {
+      const blob = await api.exportProject(project.id, format)
+      const objectUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const safeName = [...(project.projectname || '未命名作品')]
+        .map(character => (/[\\/:*?"<>|]/.test(character) || character.charCodeAt(0) < 32 ? '_' : character))
+        .join('')
+        .trim()
+      link.href = objectUrl
+      link.download = `${safeName || '未命名作品'}.${format === 'markdown' ? 'md' : 'txt'}`
+      document.body.append(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+      setNotice(`作品已导出为 ${format === 'markdown' ? 'Markdown' : 'TXT'}`)
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '作品导出失败，请稍后重试')
+    } finally {
+      setExportingFormat(null)
+    }
+  }
+
   if (loading)
     return (
       <div className="page">
@@ -244,10 +283,30 @@ export function ProjectDetailPage() {
               </button>
             </>
           ) : (
-            <button className="primary-button" type="button" onClick={() => setEditing(true)}>
-              <Edit3 size={15} />
-              编辑作品
-            </button>
+            <>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void exportProject('markdown')}
+                disabled={exportingFormat !== null}
+              >
+                <Download size={15} />
+                {exportingFormat === 'markdown' ? '正在导出…' : '导出 Markdown'}
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void exportProject('txt')}
+                disabled={exportingFormat !== null}
+              >
+                <Download size={15} />
+                {exportingFormat === 'txt' ? '正在导出…' : '导出 TXT'}
+              </button>
+              <button className="primary-button" type="button" onClick={() => setEditing(true)}>
+                <Edit3 size={15} />
+                编辑作品
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -377,6 +436,9 @@ export function ProjectDetailPage() {
         </div>
         <Link className="secondary-button" to={`/projects/${project.id}/outline`}>
           进入大纲详情
+        </Link>
+        <Link className="secondary-button" to={`/projects/${project.id}/memories`}>
+          管理长期记忆
         </Link>
       </section>
 
