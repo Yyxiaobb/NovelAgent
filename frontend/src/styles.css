@@ -345,6 +345,9 @@ h1, h2, h3, p { margin-top: 0; }
 .story-memory-entry.is-inactive { opacity: .68; }
 .story-memory-entry-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .story-memory-entry-heading h3 { display: inline-block; margin: 0 0 0 9px; font-size: 15px; }
+.memory-review-badge { display: inline-block; margin-left: 8px; padding: 3px 7px; border-radius: 999px; font-size: 11px; }
+.memory-review-badge.pending { color: #8a5a17; background: #f7ebce; }
+.memory-review-badge.rejected { color: #8e4842; background: #f4e3e0; }
 .story-memory-entry > p { margin: 12px 0; color: var(--ink); white-space: pre-wrap; line-height: 1.7; }
 .story-memory-entry small { display: block; margin-top: 6px; color: var(--muted); }
 .story-memory-entry-actions { display: flex; align-items: center; gap: 12px; }

@@ -70,6 +70,8 @@ export interface StoryMemoryEntry {
   keywords: string[]
   source_chapter_id: number | null
   is_active: boolean
+  review_status: 'pending' | 'approved' | 'rejected'
+  origin: 'manual' | 'chapter_extract'
   created_at: string
   updated_at: string
 }

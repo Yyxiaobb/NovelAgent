@@ -24,6 +24,8 @@ class StoryMemory(Base):
         Integer, ForeignKey("chapters.id", ondelete="SET NULL"), nullable=True,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    review_status: Mapped[str] = mapped_column(String(20), nullable=False, default="approved", index=True)
+    origin: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now, nullable=False,

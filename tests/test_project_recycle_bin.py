@@ -521,6 +521,25 @@ class ProjectEditingTests(RecycleBinTestCase):
             self.assertEqual(saved.summary, generated["summary"])
             self.assertEqual(saved.memory["unresolved_threads"], generated["unresolved_threads"])
 
+        pending = (await self.client.get(f"/api/project/{project_id}/memories")).json()["data"]
+        suggestions = [item for item in pending if item["origin"] == "chapter_extract"]
+        self.assertEqual(len(suggestions), 4)
+        self.assertTrue(all(item["review_status"] == "pending" and not item["is_active"] for item in suggestions))
+
+        character_suggestion = next(item for item in suggestions if item["category"] == "character")
+        review_response = await self.client.post(
+            f"/api/project/{project_id}/memories/{character_suggestion['id']}/review",
+            json={"decision": "approved"},
+        )
+        self.assertEqual(review_response.status_code, 200)
+        self.assertEqual(review_response.json()["data"]["review_status"], "approved")
+        self.assertTrue(review_response.json()["data"]["is_active"])
+        reject_response = await self.client.post(
+            f"/api/project/{project_id}/memories/{suggestions[1]['id']}/review",
+            json={"decision": "rejected"},
+        )
+        self.assertEqual(reject_response.json()["data"]["review_status"], "rejected")
+
     async def test_generate_chapter_memory_rejects_empty_content_and_invalid_json(self):
         project_id = await self.seed_project(chapter_count=1)
         async with self.sessions() as session:

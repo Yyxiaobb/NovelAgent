@@ -25,7 +25,13 @@ class StoryMemoryInfo(BaseModel):
     keywords: list[str]
     source_chapter_id: int | None
     is_active: bool
+    review_status: Literal["pending", "approved", "rejected"]
+    origin: Literal["manual", "chapter_extract"]
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class StoryMemoryReviewRequest(BaseModel):
+    decision: Literal["approved", "rejected"]

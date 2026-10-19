@@ -6,7 +6,7 @@ from config.db_conf import get_db
 from crud import story_memory as memory_crud
 from crud import projects
 from models.users import User
-from schemas.story_memory import StoryMemoryInfo, StoryMemoryRequest
+from schemas.story_memory import StoryMemoryInfo, StoryMemoryRequest, StoryMemoryReviewRequest
 from utils.auth import get_current_user
 from utils.response import success_response
 
@@ -76,3 +76,20 @@ async def remove_memory(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="长期记忆不存在或不可访问")
     await memory_crud.delete_project_memory(db, memory)
     return success_response(message="长期记忆已删除", data={"id": memory_id})
+
+
+@router.post("/{memory_id}/review")
+async def review_memory(
+    payload: StoryMemoryReviewRequest,
+    project_id: int = Path(..., gt=0),
+    memory_id: int = Path(..., gt=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    memory = await memory_crud.get_project_memory(db, project_id, memory_id, user.id)
+    if memory is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="长期记忆不存在或不可访问")
+    if memory.origin != "chapter_extract" or memory.review_status != "pending":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有待审核的章节提取记忆可以审核")
+    reviewed = await memory_crud.review_project_memory(db, memory, payload.decision)
+    return success_response(message="长期记忆审核完成", data=StoryMemoryInfo.model_validate(reviewed))

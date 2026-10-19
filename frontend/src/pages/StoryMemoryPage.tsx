@@ -1,4 +1,4 @@
-import { ArrowLeft, BookOpenText, Plus, Save, Trash2, X } from 'lucide-react'
+import { ArrowLeft, BookOpenText, Check, Plus, Save, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api/client'
@@ -132,6 +132,16 @@ export function StoryMemoryPage() {
     }
   }
 
+  async function review(entry: StoryMemoryEntry, decision: 'approved' | 'rejected') {
+    try {
+      const updated = await api.reviewProjectMemory(id, entry.id, decision)
+      setEntries(current => current.map(item => (item.id === updated.id ? updated : item)))
+      setNotice(decision === 'approved' ? '记忆已审核并加入后续生成上下文' : '已拒绝该记忆建议')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '审核失败，请稍后重试')
+    }
+  }
+
   if (loading)
     return (
       <div className="page">
@@ -154,7 +164,7 @@ export function StoryMemoryPage() {
         <div>
           <p className="eyebrow">{project?.projectname || '作品'} · 创作资料</p>
           <h1>长期记忆</h1>
-          <p>整理人物、世界设定、未解线索和时间线，相关资料会按当前章节规划加入生成上下文。</p>
+          <p>整理人物、世界设定、未解线索和时间线。章节摘要会生成待审核建议，审核通过后才加入生成上下文。</p>
         </div>
       </header>
       {error && (
@@ -291,9 +301,27 @@ export function StoryMemoryPage() {
                     <span className="memory-updated-label">
                       {categories.find(item => item.value === entry.category)?.label}
                     </span>
+                    {entry.review_status === 'pending' && <span className="memory-review-badge pending">待审核</span>}
+                    {entry.review_status === 'rejected' && <span className="memory-review-badge rejected">已拒绝</span>}
                     <h3>{entry.title}</h3>
                   </div>
                   <div className="story-memory-entry-actions">
+                    {entry.review_status === 'pending' && (
+                      <>
+                        <button className="text-link" type="button" onClick={() => void review(entry, 'approved')}>
+                          <Check size={15} />
+                          通过
+                        </button>
+                        <button
+                          className="text-link danger-link"
+                          type="button"
+                          onClick={() => void review(entry, 'rejected')}
+                        >
+                          <X size={15} />
+                          拒绝
+                        </button>
+                      </>
+                    )}
                     <button className="text-link" type="button" onClick={() => beginEdit(entry)}>
                       编辑
                     </button>

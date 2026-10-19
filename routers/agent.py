@@ -10,6 +10,7 @@ from config.db_conf import AsyncSessionLocal, get_db
 from config.queue_conf import abort_content_job, enqueue_content_job
 from crud import projects
 from crud import generation as generation_crud
+from crud import story_memory as story_memory_crud
 from models.users import User
 from schemas.agent import (
     ChapterGenerationRequest, ChapterGenerationResponse,
@@ -402,6 +403,13 @@ async def generate_chapter_memory(
     chapter.memory = memory.model_dump()
     await db.commit()
     await db.refresh(chapter)
+    await story_memory_crud.sync_extracted_memories(
+        db,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        chapter_number=chapter.chapter_number,
+        memory=memory.model_dump(),
+    )
     return success_response(
         message="章节摘要已整理",
         data=ChapterMemoryGenerationResponse(project_id=project.id, chapter_id=chapter.id, summary=summary, memory=memory),

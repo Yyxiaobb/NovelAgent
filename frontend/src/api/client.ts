@@ -143,6 +143,11 @@ export const api = {
     }),
   deleteProjectMemory: (projectId: number, memoryId: number) =>
     request<{ id: number }>(`/api/project/${projectId}/memories/${memoryId}`, { method: 'DELETE' }),
+  reviewProjectMemory: (projectId: number, memoryId: number, decision: 'approved' | 'rejected') =>
+    request<StoryMemoryEntry>(`/api/project/${projectId}/memories/${memoryId}/review`, {
+      method: 'POST',
+      body: JSON.stringify({ decision }),
+    }),
   exportProject: async (projectId: number, format: 'markdown' | 'txt'): Promise<Blob> => {
     const token = localStorage.getItem(TOKEN_KEY)
     const headers = new Headers()
