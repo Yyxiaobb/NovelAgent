@@ -40,7 +40,9 @@ async def build_context(db: AsyncSession, project_id: int, chapter_id: int, user
         chapter.chaptername or "", plan.objective, plan.conflict, plan.key_events,
         plan.ending_hook, payload.user_idea or "",
     ))
-    project_memory_context = build_project_memory_context(project_memories, memory_query)
+    project_memory_context = build_project_memory_context(
+        project_memories, memory_query, current_chapter_id=chapter.id,
+    )
     prompt = (
         "你是一名专业的中文小说作者，请依据作品设定创作指定章节正文。\n"
         f"作品名称：{project.projectname or '未命名作品'}\n作品类型：{project.project_type or '未指定'}\n"
