@@ -239,7 +239,7 @@ class ProjectEditingTests(RecycleBinTestCase):
         self.assertEqual(forbidden.status_code, 404)
         self.client.headers["Authorization"] = "Bearer owner-token"
 
-        with patch("routers.agent.LLMClient") as llm_class:
+        with patch("services.generation_runtime.LLMClient") as llm_class:
             llm_class.return_value.__aenter__.return_value.achat = AsyncMock(return_value="风雪中的信使停下脚步。")
             generated = await self.client.post(
                 f"/api/agent/projects/{project_id}/chapters/{chapter_id}/content",
@@ -521,7 +521,7 @@ class ProjectEditingTests(RecycleBinTestCase):
             project.projectname = "星河归途"
             await session.commit()
 
-        with patch("routers.agent.LLMClient") as llm_class:
+        with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
             client.achat = AsyncMock(return_value="第一卷：星海启程")
             response = await self.client.post(
@@ -562,7 +562,7 @@ class ProjectEditingTests(RecycleBinTestCase):
             chapter_id = chapter.id
             await session.commit()
 
-        with patch("routers.agent.LLMClient") as llm_class:
+        with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
             client.achat = AsyncMock(return_value="飞船缓缓驶离港口。")
             response = await self.client.post(
@@ -595,7 +595,7 @@ class ProjectEditingTests(RecycleBinTestCase):
             chapter_id = chapters[1].id
             await session.commit()
 
-        with patch("routers.agent.LLMClient") as llm_class:
+        with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
             client.achat = AsyncMock(return_value="北境关隘外，风雪骤起。")
             response = await self.client.post(
@@ -624,7 +624,7 @@ class ProjectEditingTests(RecycleBinTestCase):
             "unresolved_threads": "信使携带的密函来源不明",
             "timeline": "雨夜，王城封锁前",
         }
-        with patch("routers.agent.LLMClient") as llm_class:
+        with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
             client.achat = AsyncMock(return_value=json.dumps(generated, ensure_ascii=False))
             response = await self.client.post(
@@ -671,7 +671,7 @@ class ProjectEditingTests(RecycleBinTestCase):
         async with self.sessions() as session:
             (await session.get(Chapter, chapter_id)).content = "已有正文"
             await session.commit()
-        with patch("routers.agent.LLMClient") as llm_class:
+        with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
             client.achat = AsyncMock(return_value="不是 JSON")
             invalid = await self.client.post(f"/api/agent/projects/{project_id}/chapters/{chapter_id}/memory", json={})
