@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta
 
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -36,6 +37,9 @@ class AuthSessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(await get_user_by_token(session, second))
             tokens = list((await session.scalars(select(UserToken))).all())
             self.assertEqual(len(tokens), 2)
+            for token in tokens:
+                self.assertGreater(token.expires_at, datetime.now() + timedelta(hours=23, minutes=59))
+                self.assertLessEqual(token.expires_at, datetime.now() + timedelta(hours=24))
 
     async def test_password_change_revokes_other_sessions(self):
         async with self.sessions() as session:

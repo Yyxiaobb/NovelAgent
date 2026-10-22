@@ -12,9 +12,11 @@ from crud import outline_versions
 from config.db_conf import get_db
 from models.users import User
 from schemas.projects import ChapterInfo, ChapterRequest, ChapterVersionInfo, OutlineInfo, OutlineRequest, OutlineVersionInfo, ProjectRequest, ProjectInfoBase
+from schemas.media import ImageUploadRequest
 from utils.auth import get_current_user
 from utils.response import success_response
 from services.project_export import render_project_export
+from utils.media import save_data_url
 
 
 router = APIRouter(prefix="/api/project", tags=["projects"])
@@ -55,6 +57,23 @@ async def get_project_chapters(
 
     response = [ChapterInfo.model_validate(chapter) for chapter in chapter_list]
     return success_response(message="获取章节成功", data=response)
+
+
+@router.post("/{project_id}/cover/upload")
+async def upload_project_cover(
+    payload: ImageUploadRequest,
+    project_id: int = Path(..., gt=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    project = await projects.get_project(db, project_id, user.id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="项目不存在或已在回收站")
+    project.cover_url = save_data_url(payload.data_url, "covers")
+    db.add(project)
+    await db.commit()
+    await db.refresh(project)
+    return success_response(message="作品封面上传成功", data=ProjectInfoBase.model_validate(project))
 
 
 @router.get("/{project_id}/export/{file_format}")

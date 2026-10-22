@@ -1,4 +1,4 @@
-import { ArrowLeft, BookOpenText, Check, Plus, Save, Trash2, X } from 'lucide-react'
+import { ArrowLeft, BookOpenText, Check, Plus, RotateCcw, Save, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api/client'
@@ -200,6 +200,18 @@ export function StoryMemoryPage() {
       setEvents(await api.getProjectMemoryEvents(id))
     } catch (reason) {
       setNotice(reason instanceof Error ? reason.message : '合并失败，请稍后重试')
+    }
+  }
+
+  async function undoEvent(event: StoryMemoryEvent) {
+    const memoryId = event.memory_id ?? event.related_memory_ids[0]
+    if (!memoryId) return
+    try {
+      await api.undoProjectMemory(id, memoryId, event.id)
+      await load()
+      setNotice('已撤销最近一次记忆操作')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '撤销失败，请稍后重试')
     }
   }
 
@@ -524,13 +536,27 @@ export function StoryMemoryPage() {
                     ? '合并记忆'
                     : event.event_type === 'batch_review'
                       ? '批量审核'
-                      : '审核记忆'}
+                      : event.event_type === 'update'
+                        ? '编辑记忆'
+                        : event.event_type.startsWith('undo_')
+                          ? '撤销操作'
+                          : '审核记忆'}
                 </strong>
                 <span>
-                  {event.event_type === 'merge'
-                    ? `保留 #${event.memory_id}，合并来源 ${event.related_memory_ids.map(idValue => `#${idValue}`).join('、')}`
-                    : `条目 ${event.related_memory_ids.length ? event.related_memory_ids.map(idValue => `#${idValue}`).join('、') : `#${event.memory_id}`} · ${String(event.details.decision || '')}`}
+                  {event.event_type.startsWith('undo_')
+                    ? `已撤销操作 #${String(event.details.reverted_event_id || '')}`
+                    : event.event_type === 'merge'
+                      ? `保留 #${event.memory_id}，合并来源 ${event.related_memory_ids.map(idValue => `#${idValue}`).join('、')}`
+                      : event.event_type === 'update'
+                        ? `条目 #${event.memory_id} · 内容已修改`
+                        : `条目 ${event.related_memory_ids.length ? event.related_memory_ids.map(idValue => `#${idValue}`).join('、') : `#${event.memory_id}`} · ${String(event.details.decision || '')}`}
                 </span>
+                {!event.event_type.startsWith('undo_') && (
+                  <button className="text-link" type="button" onClick={() => void undoEvent(event)}>
+                    <RotateCcw size={14} />
+                    撤销
+                  </button>
+                )}
                 <time>
                   {new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' }).format(
                     new Date(event.created_at),

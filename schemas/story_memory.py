@@ -60,7 +60,10 @@ class StoryMemoryEventInfo(BaseModel):
     id: int
     project_id: int
     actor_user_id: int
-    event_type: Literal["review", "batch_review", "merge"]
+    event_type: Literal[
+        "review", "batch_review", "merge", "update",
+        "undo_review", "undo_batch_review", "undo_merge", "undo_update",
+    ]
     memory_id: int | None
     related_memory_ids: list[int]
     details: dict

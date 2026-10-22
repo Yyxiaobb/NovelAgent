@@ -5,6 +5,29 @@ from crud.projects import get_project
 from models.story_memory import StoryMemory, StoryMemoryEvent
 
 
+def _memory_snapshot(memory: StoryMemory) -> dict:
+    return {
+        "category": memory.category,
+        "title": memory.title,
+        "content": memory.content,
+        "keywords": list(memory.keywords or []),
+        "source_chapter_id": memory.source_chapter_id,
+        "is_active": memory.is_active,
+        "review_status": memory.review_status,
+        "origin": memory.origin,
+        "merged_into_id": memory.merged_into_id,
+    }
+
+
+def _restore_memory(memory: StoryMemory, snapshot: dict) -> None:
+    for field in (
+        "category", "title", "content", "keywords", "source_chapter_id",
+        "is_active", "review_status", "origin", "merged_into_id",
+    ):
+        if field in snapshot:
+            setattr(memory, field, snapshot[field])
+
+
 async def list_project_memories(db: AsyncSession, project_id: int, user_id: int) -> list[StoryMemory] | None:
     if await get_project(db, project_id, user_id) is None:
         return None
@@ -51,9 +74,20 @@ async def get_project_memory(
     return result.one_or_none()
 
 
-async def update_project_memory(db: AsyncSession, memory: StoryMemory, payload) -> StoryMemory:
+async def update_project_memory(
+    db: AsyncSession, memory: StoryMemory, payload, *, actor_user_id: int,
+) -> StoryMemory:
+    before = _memory_snapshot(memory)
     for key, value in payload.model_dump().items():
         setattr(memory, key, value)
+    db.add(StoryMemoryEvent(
+        project_id=memory.project_id,
+        actor_user_id=actor_user_id,
+        event_type="update",
+        memory_id=memory.id,
+        related_memory_ids=[],
+        details={"before": before, "after": _memory_snapshot(memory)},
+    ))
     await db.commit()
     await db.refresh(memory)
     return memory
@@ -180,11 +214,8 @@ async def merge_project_memories(
 ) -> tuple[StoryMemory, list[StoryMemory]]:
     source_ids = [memory.id for memory in sources]
     before = {
-        "target": {"content": target.content, "keywords": target.keywords or [], "is_active": target.is_active},
-        "sources": {
-            str(memory.id): {"content": memory.content, "keywords": memory.keywords or []}
-            for memory in sources
-        },
+        "target": _memory_snapshot(target),
+        "sources": {str(memory.id): _memory_snapshot(memory) for memory in sources},
     }
     additions = [memory.content.strip() for memory in sources if memory.content.strip()]
     if additions:
@@ -214,3 +245,98 @@ async def merge_project_memories(
     await db.commit()
     await db.refresh(target)
     return target, sources
+
+
+async def undo_project_memory_event(
+    db: AsyncSession,
+    *,
+    project_id: int,
+    memory_id: int,
+    actor_user_id: int,
+    event_id: int | None = None,
+) -> StoryMemory | None:
+    """Undo the latest non-undone event involving a memory in this project."""
+    if await get_project(db, project_id, actor_user_id) is None:
+        return None
+    events_result = await db.scalars(
+        select(StoryMemoryEvent)
+        .where(StoryMemoryEvent.project_id == project_id)
+        .order_by(StoryMemoryEvent.created_at.desc(), StoryMemoryEvent.id.desc())
+    )
+    events = list(events_result.all())
+    reverted_ids = {
+        int(event.details["reverted_event_id"])
+        for event in events
+        if event.event_type.startswith("undo_") and event.details.get("reverted_event_id") is not None
+    }
+    source_event = next(
+        (
+            event for event in events
+            if (event_id is None or event.id == event_id)
+            if event.id not in reverted_ids
+            and not event.event_type.startswith("undo_")
+            and (event.memory_id == memory_id or memory_id in (event.related_memory_ids or []))
+        ),
+        None,
+    )
+    if source_event is None:
+        return None
+
+    if source_event.event_type in {"review", "update"}:
+        memory = await db.scalar(
+            select(StoryMemory).where(StoryMemory.id == source_event.memory_id, StoryMemory.project_id == project_id)
+        )
+        if memory is None:
+            return None
+        if source_event.event_type == "review":
+            previous = source_event.details.get("previous", {})
+            memory.review_status = previous.get("review_status", memory.review_status)
+            memory.is_active = previous.get("is_active", memory.is_active)
+        else:
+            _restore_memory(memory, source_event.details.get("before", {}))
+        result_memory = memory
+    elif source_event.event_type == "batch_review":
+        previous = source_event.details.get("previous", {})
+        memories = list((await db.scalars(
+            select(StoryMemory).where(
+                StoryMemory.project_id == project_id,
+                StoryMemory.id.in_([int(item) for item in previous]),
+            )
+        )).all())
+        for memory in memories:
+            state = previous.get(str(memory.id), {})
+            memory.review_status = state.get("review_status", memory.review_status)
+            memory.is_active = state.get("is_active", memory.is_active)
+        result_memory = next((item for item in memories if item.id == memory_id), memories[0] if memories else None)
+        if result_memory is None:
+            return None
+    elif source_event.event_type == "merge":
+        details = source_event.details.get("before", {})
+        snapshots = {str(source_event.memory_id): details.get("target", {})}
+        snapshots.update(details.get("sources", {}))
+        memories = list((await db.scalars(
+            select(StoryMemory).where(
+                StoryMemory.project_id == project_id,
+                StoryMemory.id.in_([int(item) for item in snapshots]),
+            )
+        )).all())
+        for memory in memories:
+            _restore_memory(memory, snapshots.get(str(memory.id), {}))
+        result_memory = next((item for item in memories if item.id == memory_id), None)
+        if result_memory is None:
+            return None
+    else:
+        return None
+
+    undo_type = f"undo_{source_event.event_type}"
+    db.add(StoryMemoryEvent(
+        project_id=project_id,
+        actor_user_id=actor_user_id,
+        event_type=undo_type,
+        memory_id=source_event.memory_id,
+        related_memory_ids=list(source_event.related_memory_ids or []),
+        details={"reverted_event_id": source_event.id},
+    ))
+    await db.commit()
+    await db.refresh(result_memory)
+    return result_memory

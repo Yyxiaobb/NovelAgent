@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.users import User, UserToken
 from schemas.users import UserRequest, UserUpdateRequest
 from utils import security
+from utils.session import SESSION_TTL_SECONDS
 
 
 async def get_user_by_username(db: AsyncSession, username: str):
@@ -28,7 +29,7 @@ async def create_token(db: AsyncSession, user_id: int):
     # not invalidate another device. Expired sessions are removed while the
     # user is logging in to keep the table bounded.
     token = str(uuid.uuid4())
-    expires_at = datetime.now() + timedelta(days=7)
+    expires_at = datetime.now() + timedelta(seconds=SESSION_TTL_SECONDS)
     await db.execute(delete(UserToken).where(UserToken.expires_at <= datetime.now()))
     db.add(UserToken(user_id=user_id, token=token, expires_at=expires_at))
 

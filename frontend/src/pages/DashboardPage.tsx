@@ -1,4 +1,4 @@
-import { ArrowRight, BookOpenText, FileText, Plus, TrendingUp } from 'lucide-react'
+import { ArrowRight, BookOpenText, FileText, Lightbulb, Plus, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
@@ -55,6 +55,19 @@ export function DashboardPage() {
         </Link>
       </header>
 
+      <section className="dashboard-idea-entry">
+        <div className="dashboard-idea-entry-icon">
+          <Lightbulb size={21} />
+        </div>
+        <div>
+          <h2>灵感库</h2>
+          <p>记录、完善和管理你的故事灵感，让每个念头都能继续生长。</p>
+        </div>
+        <Link className="secondary-button" to="/inspirations">
+          进入灵感库 <ArrowRight size={15} />
+        </Link>
+      </section>
+
       <section className="metrics-grid" aria-label="作品统计">
         <article className="metric">
           <span className="metric-icon red">
@@ -96,11 +109,8 @@ export function DashboardPage() {
           </Link>
         </div>
         {error ? (
-          <div className="empty-state compact">
+          <div className="form-message error" role="alert">
             <p>{error}</p>
-            <button className="secondary-button" onClick={() => window.location.reload()}>
-              重新加载
-            </button>
           </div>
         ) : loading ? (
           <div className="project-list skeleton-list">
@@ -111,8 +121,7 @@ export function DashboardPage() {
         ) : recentProjects.length === 0 ? (
           <div className="empty-state">
             <BookOpenText size={30} />
-            <h3>还没有作品</h3>
-            <p>创建第一部作品，让想法有一个清晰的起点。</p>
+            <h3>当前暂无作品，快去创建你的第一个作品吧！</h3>
           </div>
         ) : (
           <div className="project-list">

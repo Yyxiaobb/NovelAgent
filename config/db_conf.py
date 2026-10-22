@@ -33,10 +33,17 @@ def _env_bool(name: str, default: bool = False) -> bool:
 # 创建异步引擎。SQLite（例如本地测试）不支持 MySQL 的连接池参数。
 _engine_options = {
     "echo": _env_bool("SQL_ECHO", False),
-    "pool_pre_ping": True,
 }
 if not ASYNC_DATABASE_URL.startswith("sqlite"):
-    _engine_options.update(pool_size=10, max_overflow=20)
+    _engine_options.update(pool_size=10, max_overflow=20, pool_recycle=1800)
+    # SQLAlchemy's generic pre-ping calls ``connection.ping()`` without the
+    # reconnect argument required by the installed aiomysql adapter. That
+    # raises TypeError when a pooled connection is checked out and surfaces
+    # as intermittent 500 responses after the first request. Recycling the
+    # connections avoids stale long-lived sockets without invoking the
+    # incompatible ping path.
+    if "+aiomysql" not in ASYNC_DATABASE_URL:
+        _engine_options["pool_pre_ping"] = True
 
 async_engine = create_async_engine(ASYNC_DATABASE_URL, **_engine_options)
 

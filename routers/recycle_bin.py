@@ -3,9 +3,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
 from config.db_conf import get_db
-from crud import recycle_bin
+from crud import inspirations, recycle_bin
 from models.users import User
 from schemas.projects import ChapterInfo, ProjectInfoBase, RecycledChapterInfo
+from schemas.knowledge_base import KnowledgeBaseInfo
+from schemas.inspiration import InspirationInfo
 from utils.auth import get_current_user
 from utils.response import success_response
 
@@ -120,6 +122,73 @@ async def permanently_delete_chapter(
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="回收站中不存在该章节")
     return success_response(message="章节已彻底删除")
+
+
+@router.get("/knowledge-bases")
+async def get_recycled_knowledge_bases(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    bases = await recycle_bin.get_recycled_knowledge_bases(db, user.id)
+    response = [KnowledgeBaseInfo(
+        id=base.id, name=base.name, description=base.description,
+        document_count=len(base.documents),
+        ready_document_count=sum(document.status == "ready" for document in base.documents),
+        created_at=base.created_at, updated_at=base.updated_at, is_deleted=base.is_deleted,
+    ) for base in bases]
+    return success_response(message="获取回收站知识库成功", data=response)
+
+
+@router.put("/knowledge-bases/{base_id}/restore")
+async def restore_knowledge_base(
+    base_id: int = Path(..., gt=0), db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user),
+):
+    base = await recycle_bin.restore_knowledge_base(db, base_id, user.id)
+    if base is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="回收站中不存在该知识库")
+    return success_response(message="知识库已还原", data=KnowledgeBaseInfo(
+        id=base.id, name=base.name, description=base.description,
+        document_count=len(base.documents),
+        ready_document_count=sum(document.status == "ready" for document in base.documents),
+        created_at=base.created_at, updated_at=base.updated_at, is_deleted=base.is_deleted,
+    ))
+
+
+@router.delete("/knowledge-bases/{base_id}")
+async def permanently_delete_knowledge_base(
+    base_id: int = Path(..., gt=0), db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user),
+):
+    deleted = await recycle_bin.permanently_delete_knowledge_base(db, base_id, user.id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="回收站中不存在该知识库")
+    return success_response(message="知识库及其文档已彻底删除")
+
+
+@router.get("/inspirations")
+async def get_recycled_inspirations(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    items = await inspirations.list_recycled_inspirations(db, user.id)
+    return success_response(message="获取回收站灵感成功", data=[InspirationInfo.model_validate(item) for item in items])
+
+
+@router.put("/inspirations/{inspiration_id}/restore")
+async def restore_inspiration(
+    inspiration_id: int = Path(..., gt=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = await inspirations.restore_inspiration(db, inspiration_id, user.id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="回收站中不存在该灵感")
+    return success_response(message="灵感已还原", data=InspirationInfo.model_validate(item))
+
+
+@router.delete("/inspirations/{inspiration_id}")
+async def permanently_delete_inspiration(
+    inspiration_id: int = Path(..., gt=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    deleted = await inspirations.permanently_delete_inspiration(db, inspiration_id, user.id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="回收站中不存在该灵感")
+    return success_response(message="灵感已彻底删除")
 
 
 # 保留既有 URL，避免已接入客户端在切换到独立回收站路由时中断。

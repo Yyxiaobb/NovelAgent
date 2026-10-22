@@ -1,4 +1,4 @@
-import { Eye, EyeOff, KeyRound, LogOut, ShieldCheck } from 'lucide-react'
+import { Eye, EyeOff, KeyRound, LogOut, ShieldCheck, X } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { api } from '../api/client'
@@ -11,6 +11,7 @@ export function SettingsPage() {
   const [visible, setVisible] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [changingPassword, setChangingPassword] = useState(false)
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -51,64 +52,85 @@ export function SettingsPage() {
             <h2>修改密码</h2>
             <p>建议使用至少 8 位且不与其他服务重复的密码。</p>
           </div>
+          {!changingPassword ? (
+            <button className="secondary-button" type="button" onClick={() => setChangingPassword(true)}>
+              <KeyRound size={16} />
+              修改密码
+            </button>
+          ) : (
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => {
+                setChangingPassword(false)
+                setMessage(null)
+              }}
+              disabled={submitting}
+            >
+              <X size={16} />
+              取消
+            </button>
+          )}
         </div>
-        <form className="form-stack settings-form" onSubmit={handleSubmit}>
-          <label className="field">
-            <span>原密码</span>
-            <input
-              type={visible ? 'text' : 'password'}
-              value={oldPassword}
-              onChange={event => setOldPassword(event.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </label>
-          <label className="field">
-            <span>新密码</span>
-            <span className="input-with-action">
+        {changingPassword && (
+          <form className="form-stack settings-form" onSubmit={handleSubmit}>
+            <label className="field">
+              <span>原密码</span>
               <input
                 type={visible ? 'text' : 'password'}
-                value={newPassword}
-                onChange={event => setNewPassword(event.target.value)}
+                value={oldPassword}
+                onChange={event => setOldPassword(event.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </label>
+            <label className="field">
+              <span>新密码</span>
+              <span className="input-with-action">
+                <input
+                  type={visible ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={event => setNewPassword(event.target.value)}
+                  minLength={6}
+                  maxLength={128}
+                  autoComplete="new-password"
+                  required
+                />
+                <button
+                  className="input-action"
+                  type="button"
+                  onClick={() => setVisible(value => !value)}
+                  aria-label={visible ? '隐藏密码' : '显示密码'}
+                >
+                  {visible ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </span>
+            </label>
+            <label className="field">
+              <span>确认新密码</span>
+              <input
+                type={visible ? 'text' : 'password'}
+                value={confirmPassword}
+                onChange={event => setConfirmPassword(event.target.value)}
                 minLength={6}
                 maxLength={128}
                 autoComplete="new-password"
                 required
               />
-              <button
-                className="input-action"
-                type="button"
-                onClick={() => setVisible(value => !value)}
-                aria-label={visible ? '隐藏密码' : '显示密码'}
-              >
-                {visible ? <EyeOff size={18} /> : <Eye size={18} />}
+            </label>
+            {message && (
+              <div className={`form-message ${message.type}`} role="status">
+                {message.text}
+              </div>
+            )}
+            <div>
+              <button className="primary-button" type="submit" disabled={submitting}>
+                <ShieldCheck size={17} />
+                {submitting ? '正在修改…' : '更新密码'}
               </button>
-            </span>
-          </label>
-          <label className="field">
-            <span>确认新密码</span>
-            <input
-              type={visible ? 'text' : 'password'}
-              value={confirmPassword}
-              onChange={event => setConfirmPassword(event.target.value)}
-              minLength={6}
-              maxLength={128}
-              autoComplete="new-password"
-              required
-            />
-          </label>
-          {message && (
-            <div className={`form-message ${message.type}`} role="status">
-              {message.text}
             </div>
-          )}
-          <div>
-            <button className="primary-button" type="submit" disabled={submitting}>
-              <ShieldCheck size={17} />
-              {submitting ? '正在修改…' : '更新密码'}
-            </button>
-          </div>
-        </form>
+          </form>
+        )}
       </section>
       <section className="settings-panel danger-panel">
         <div className="panel-title">

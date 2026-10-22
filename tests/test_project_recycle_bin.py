@@ -321,6 +321,64 @@ class ProjectEditingTests(RecycleBinTestCase):
         self.assertEqual(events.status_code, 200)
         self.assertEqual(events.json()["data"][0]["event_type"], "merge")
 
+    async def test_story_memory_undo_restores_update_and_review(self):
+        project_id = await self.seed_project(chapter_count=1)
+        created = await self.client.post(
+            f"/api/project/{project_id}/memories",
+            json={"category": "character", "title": "沈砚", "content": "初始状态", "keywords": ["初始"]},
+        )
+        memory_id = created.json()["data"]["id"]
+        updated = await self.client.put(
+            f"/api/project/{project_id}/memories/{memory_id}",
+            json={"category": "character", "title": "沈砚新名", "content": "修改状态", "keywords": ["修改"]},
+        )
+        self.assertEqual(updated.status_code, 200)
+        undone = await self.client.post(f"/api/project/{project_id}/memories/{memory_id}/undo")
+        self.assertEqual(undone.status_code, 200)
+        self.assertEqual(undone.json()["data"]["title"], "沈砚")
+        self.assertEqual(undone.json()["data"]["content"], "初始状态")
+
+        async with self.sessions() as session:
+            memory = await session.get(StoryMemory, memory_id)
+            memory.origin = "chapter_extract"
+            memory.review_status = "pending"
+            memory.is_active = False
+            await session.commit()
+        reviewed = await self.client.post(
+            f"/api/project/{project_id}/memories/{memory_id}/review", json={"decision": "approved"},
+        )
+        self.assertEqual(reviewed.status_code, 200)
+        reverted = await self.client.post(f"/api/project/{project_id}/memories/{memory_id}/undo")
+        self.assertEqual(reverted.status_code, 200)
+        self.assertEqual(reverted.json()["data"]["review_status"], "pending")
+        self.assertFalse(reverted.json()["data"]["is_active"])
+        duplicate = await self.client.post(f"/api/project/{project_id}/memories/{memory_id}/undo")
+        self.assertEqual(duplicate.status_code, 409)
+
+    async def test_story_memory_undo_merge_restores_sources(self):
+        project_id = await self.seed_project(chapter_count=1)
+        ids = []
+        for title, content in (("北境", "常年风雪"), ("北境补充", "冬季封关")):
+            response = await self.client.post(
+                f"/api/project/{project_id}/memories",
+                json={"category": "world", "title": title, "content": content, "keywords": ["北境"]},
+            )
+            ids.append(response.json()["data"]["id"])
+        merged = await self.client.post(
+            f"/api/project/{project_id}/memories/merge",
+            json={"target_id": ids[0], "source_ids": [ids[1]]},
+        )
+        self.assertEqual(merged.status_code, 200)
+        undone = await self.client.post(f"/api/project/{project_id}/memories/{ids[0]}/undo")
+        self.assertEqual(undone.status_code, 200)
+        async with self.sessions() as session:
+            target = await session.get(StoryMemory, ids[0])
+            source = await session.get(StoryMemory, ids[1])
+            self.assertEqual(target.content, "常年风雪")
+            self.assertIsNone(source.merged_into_id)
+            self.assertTrue(source.is_active)
+            self.assertEqual(source.review_status, "approved")
+
     async def test_project_exports_markdown_and_txt_with_only_active_chapters(self):
         project_id = await self.seed_project(chapter_count=2)
         async with self.sessions() as session:

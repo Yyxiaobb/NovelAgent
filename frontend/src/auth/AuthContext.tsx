@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { api, tokenStore } from '../api/client'
+import { ApiError, api, tokenStore } from '../api/client'
 import type { ProfilePayload, User } from '../types'
 
 interface AuthContextValue {
@@ -18,15 +18,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (!tokenStore.get()) {
-      setLoading(false)
-      return
-    }
+    let active = true
     api
       .getProfile()
-      .then(setUser)
-      .catch(() => tokenStore.clear())
-      .finally(() => setLoading(false))
+      .then(profile => {
+        if (active) setUser(profile)
+      })
+      .catch(reason => {
+        // Browser sessions are stored in an HttpOnly cookie, so there may be
+        // no localStorage token even when the user is authenticated.
+        // Preserve a bearer token on transient server/network errors and only
+        // clear it when the server explicitly rejects the session.
+        if (reason instanceof ApiError && reason.status === 401) tokenStore.clear()
+        if (active) setUser(null)
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => {
+      active = false
+    }
   }, [])
 
   async function authenticate(mode: 'login' | 'register', username: string, password: string) {

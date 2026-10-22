@@ -1,4 +1,7 @@
+import html
+import re
 import uuid
+from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -16,12 +19,22 @@ from schemas.agent import (
     ChapterGenerationRequest, ChapterGenerationResponse,
     ChapterMemoryGenerationRequest, ChapterMemoryGenerationResponse,
     ChapterPlanGenerationRequest, ChapterPlanGenerationResponse,
+    IdeaRefinementRequest, IdeaRefinementResponse,
     OutlineGenerationRequest, OutlineGenerationResponse,
     ProjectFieldGenerationRequest, ProjectFieldGenerationResponse,
 )
 from schemas.projects import ChapterMemory
+from schemas.projects import ProjectInfoBase
+from services.knowledge_rag import (
+    EmbeddingConfigurationError,
+    EmbeddingRequestError,
+    format_retrieved_context,
+    retrieve_knowledge,
+)
 from utils.auth import get_current_user
 from utils.response import success_response
+from utils.generation_telemetry import log_generation_metric
+from utils.media import save_svg
 from services.agent_generation import (
     PROJECT_TYPES as _PROJECT_TYPES,
     content_max_tokens as _content_max_tokens,
@@ -35,9 +48,40 @@ from services.chapter_generation import (
     build_context,
     sse,
 )
+from agent.prompts import get_prompt_template, render_prompt
+from agent.runtime import run_agent
+from agent.skills import load_skill
 
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+
+def _cover_color(value: object, fallback: str) -> str:
+    candidate = str(value or "").strip()
+    return candidate if re.fullmatch(r"#[0-9a-fA-F]{6}", candidate) else fallback
+
+
+def _cover_svg(*, title: str, subtitle: str, mood: str, primary: str, secondary: str) -> str:
+    safe_title = html.escape(title[:18] or "未命名作品")
+    safe_subtitle = html.escape(subtitle[:24] or "一场故事，正在发生")
+    safe_mood = html.escape(mood[:12] or "小说创作")
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="760" height="1080" viewBox="0 0 760 1080">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{primary}"/><stop offset="1" stop-color="{secondary}"/></linearGradient>
+    <radialGradient id="glow" cx="78%" cy="18%" r="70%"><stop offset="0" stop-color="#ffffff" stop-opacity=".32"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+    <filter id="blur"><feGaussianBlur stdDeviation="28"/></filter>
+  </defs>
+  <rect width="760" height="1080" fill="url(#bg)"/>
+  <rect width="760" height="1080" fill="url(#glow)"/>
+  <circle cx="610" cy="160" r="180" fill="#ffffff" opacity=".10" filter="url(#blur)"/>
+  <path d="M0 820 C180 700 290 920 470 780 S650 690 760 760 V1080 H0Z" fill="#060b18" opacity=".42"/>
+  <path d="M80 140 H680" stroke="#ffffff" stroke-opacity=".55"/>
+  <text x="80" y="205" fill="#ffffff" fill-opacity=".78" font-family="Microsoft YaHei, sans-serif" font-size="20" letter-spacing="7">{safe_mood}</text>
+  <text x="80" y="650" fill="#ffffff" font-family="Microsoft YaHei, sans-serif" font-size="64" font-weight="700">{safe_title}</text>
+  <text x="80" y="705" fill="#ffffff" fill-opacity=".82" font-family="Microsoft YaHei, sans-serif" font-size="22">{safe_subtitle}</text>
+  <rect x="80" y="790" width="100" height="4" fill="#ffffff" fill-opacity=".7"/>
+  <text x="80" y="850" fill="#ffffff" fill-opacity=".68" font-family="Microsoft YaHei, sans-serif" font-size="16" letter-spacing="4">墨笺 · NOVEL WORKSPACE</text>
+</svg>'''
 
 
 def _generation_client(*, timeout: float | None = None) -> LLMClient:
@@ -45,36 +89,60 @@ def _generation_client(*, timeout: float | None = None) -> LLMClient:
     return LLMClient(max_retries=0, timeout=timeout)
 
 
-def _prompt(payload: ProjectFieldGenerationRequest) -> str:
-    context = (
-        f"作品名称：{payload.projectname or '未填写'}\n"
-        f"作品简介：{payload.introduction or '未填写'}\n"
-        f"作品类型：{payload.project_type or '未选择'}"
-    )
+def _prompt(payload: ProjectFieldGenerationRequest):
     if payload.field == "projectname":
         instruction = "请生成一个有辨识度、适合小说封面的中文作品名，只返回作品名，不要引号、序号或解释。"
     elif payload.field == "introduction":
         instruction = "请生成一段 80 到 180 字的中文小说简介，包含主角、背景和核心冲突，只返回简介正文。"
     else:
         instruction = f"请从以下类型中选择最合适的一项，只返回类型名称：{_PROJECT_TYPES}。"
-    return f"你是小说策划助手。\n{context}\n{instruction}"
+    return render_prompt(
+        "project_field",
+        project_name=payload.projectname or "未填写",
+        project_introduction=payload.introduction or "未填写",
+        project_type=payload.project_type or "未选择",
+        instruction=instruction,
+    )
 
 
-def _outline_prompt(project, expected_words: int, user_idea: str | None = None) -> str:
-    return (
-        "你是一名专业的中文长篇小说策划编辑。请根据以下作品资料创作一份可用于后续分章写作的完整故事大纲。\n"
-        f"作品名称：{project.projectname or '未命名作品'}\n"
-        f"作品类型：{project.project_type or '未指定'}\n"
-        f"作品简介：{project.introduction or '未提供'}\n"
-        f"用户补充想法：{user_idea.strip() if user_idea and user_idea.strip() else '未提供'}\n"
-        f"整部作品目标总字数：约 {expected_words} 字（仅用于规划分卷、节奏和情节体量，不是要求输出同等字数的大纲）\n\n"
-        "要求：\n"
-        "1. 大纲符合作品类型和简介，不擅自更改核心设定；补全必要的人物目标、冲突和世界规则。\n"
-        "2. 以清晰标题组织：核心设定、主要人物、故事主线、分卷/阶段规划、关键转折与结局。\n"
-        "3. 分卷/阶段数量和每阶段情节体量要匹配目标字数；给出建议卷数及每卷大致字数。\n"
-        "4. 情节具体、前后连贯，明确人物变化、主要悬念及其回收，避免空泛套话。\n"
-        "5. 大纲是写作规划，不是小说正文；控制篇幅，优先保留关键设定、人物目标、主线冲突、阶段节点和结局。\n"
-        "6. 只输出中文大纲正文，不要写创作过程或额外说明。"
+@router.post("/refine-idea", response_model=None)
+async def refine_idea(
+    payload: IdeaRefinementRequest,
+    _: User = Depends(get_current_user),
+):
+    idea = payload.idea.strip()
+    if not idea:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="灵感内容不能为空")
+    template, prompt = render_prompt("idea_refinement", idea=idea)
+    try:
+        async with _generation_client(timeout=90) as client:
+            model_started = perf_counter()
+            refined = (await client.achat([
+                {"role": "system", "content": template.system},
+                {"role": "user", "content": prompt},
+            ], temperature=0.7, max_tokens=1800)).strip()
+            log_generation_metric(
+                "model_complete", "idea_refinement", (perf_counter() - model_started) * 1000,
+                prompt_chars=len(prompt), output_chars=len(refined), model=client.model,
+                max_tokens=1800,
+            )
+    except LLMConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="智能生成尚未配置模型，请先配置 LLM_MODEL、LLM_API_KEY 和 LLM_BASE_URL",
+        ) from error
+    except LLMRequestError as error:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="创意完善响应超时，请缩短灵感内容后重试",
+        ) from error
+    except LLMError as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="创意完善暂时不可用，请稍后重试") from error
+    if not refined:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="模型未返回可用的完善结果")
+    return success_response(
+        message="创意完善成功",
+        data=IdeaRefinementResponse(idea=idea, refined_idea=refined),
     )
 
 
@@ -83,12 +151,19 @@ async def generate_project_field(
     payload: ProjectFieldGenerationRequest,
     _: User = Depends(get_current_user),
 ):
+    template, prompt = _prompt(payload)
     try:
         async with _generation_client() as client:
+            model_started = perf_counter()
             value = (await client.achat([
-                {"role": "system", "content": "你输出的内容会直接填入表单，必须简洁、自然、符合要求。"},
-                {"role": "user", "content": _prompt(payload)},
+                {"role": "system", "content": template.system},
+                {"role": "user", "content": prompt},
             ], temperature=0.7)).strip()
+            log_generation_metric(
+                "model_complete", f"project_field:{payload.field}",
+                (perf_counter() - model_started) * 1000,
+                prompt_chars=len(prompt), output_chars=len(value), model=client.model,
+            )
     except LLMConfigurationError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -115,6 +190,62 @@ async def generate_project_field(
     )
 
 
+@router.post("/projects/{project_id}/cover", response_model=None)
+async def generate_project_cover(
+    project_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    project = await projects.get_project(db, project_id, user.id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品不存在或已在回收站")
+    template, prompt = render_prompt(
+        "project_cover",
+        project_name=project.projectname or "未命名作品",
+        project_type=project.project_type or "未指定",
+        project_introduction=project.introduction or "未提供",
+        project_outline=(project.outline or "未提供")[:12000],
+    )
+    try:
+        async with _generation_client(timeout=60) as client:
+            model_started = perf_counter()
+            raw = (await client.achat([
+                {"role": "system", "content": template.system},
+                {"role": "user", "content": prompt},
+            ], temperature=0.8, max_tokens=400)).strip()
+            log_generation_metric(
+                "model_complete", "project_cover", (perf_counter() - model_started) * 1000,
+                prompt_chars=len(prompt), output_chars=len(raw), model=client.model, max_tokens=400,
+            )
+        try:
+            parsed_design = _json_candidate(raw)
+            design = parsed_design if isinstance(parsed_design, dict) else {}
+        except (TypeError, ValueError, KeyError):
+            design = {}
+    except LLMConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="智能封面生成尚未配置模型，请先配置 LLM_MODEL、LLM_API_KEY 和 LLM_BASE_URL",
+        ) from error
+    except LLMRequestError as error:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="智能封面生成响应超时，请稍后重试") from error
+    except LLMError as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="智能封面生成暂时不可用，请稍后重试") from error
+
+    svg = _cover_svg(
+        title=str(design.get("title") or project.projectname or "未命名作品"),
+        subtitle=str(design.get("subtitle") or project.project_type or "一场故事，正在发生"),
+        mood=str(design.get("mood") or "小说创作"),
+        primary=_cover_color(design.get("primary_color"), "#102a43"),
+        secondary=_cover_color(design.get("secondary_color"), "#3b4a86"),
+    )
+    project.cover_url = save_svg(svg)
+    db.add(project)
+    await db.commit()
+    await db.refresh(project)
+    return success_response(message="智能封面生成成功", data=ProjectInfoBase.model_validate(project))
+
+
 @router.post("/projects/{project_id}/outline", response_model=None)
 async def generate_project_outline(
     project_id: int,
@@ -126,12 +257,43 @@ async def generate_project_outline(
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品不存在或已在回收站")
 
+    template, prompt = render_prompt(
+        "project_outline",
+        project_name=project.projectname or "未命名作品",
+        project_type=project.project_type or "未指定",
+        project_introduction=project.introduction or "未提供",
+        user_idea=payload.user_idea.strip() if payload.user_idea and payload.user_idea.strip() else "未提供",
+        expected_words=payload.expected_words,
+    )
+    citations = []
+    if payload.knowledge_base_ids:
+        try:
+            citations = await retrieve_knowledge(
+                db, user_id=user.id, knowledge_base_ids=payload.knowledge_base_ids,
+                query="\n".join((project.projectname or "", project.project_type or "", project.introduction or "",
+                                 payload.user_idea or "", f"目标字数 {payload.expected_words}")),
+            )
+        except PermissionError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except EmbeddingConfigurationError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except EmbeddingRequestError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        prompt += format_retrieved_context(citations)
     try:
         async with _generation_client(timeout=120) as client:
+            model_started = perf_counter()
             outline = (await client.achat([
-                {"role": "system", "content": "你输出的内容将作为小说大纲保存，请严格遵守用户作品资料和格式要求。"},
-                {"role": "user", "content": _outline_prompt(project, payload.expected_words, payload.user_idea)},
+                {"role": "system", "content": template.system},
+                {"role": "user", "content": prompt},
             ], temperature=0.5, max_tokens=_outline_max_tokens(payload.expected_words))).strip()
+            log_generation_metric(
+                "model_complete", "project_outline", (perf_counter() - model_started) * 1000,
+                prompt_chars=len(prompt), output_chars=len(outline), model=client.model,
+                max_tokens=_outline_max_tokens(payload.expected_words),
+            )
     except LLMConfigurationError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -159,6 +321,7 @@ async def generate_project_outline(
             project_id=project.id,
             expected_words=payload.expected_words,
             outline=outline,
+            citations=citations,
         ),
     )
 
@@ -171,13 +334,24 @@ async def generate_chapter_content(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    project, chapter, plan, prompt = await build_context(db, project_id, chapter_id, user.id, payload)
+    context_started = perf_counter()
+    project, chapter, plan, prompt, citations = await build_context(db, project_id, chapter_id, user.id, payload)
+    log_generation_metric(
+        "context_built", "chapter_content", (perf_counter() - context_started) * 1000,
+        prompt_chars=len(prompt), expected_words=plan.expected_words,
+    )
     try:
         async with _generation_client() as client:
+            model_started = perf_counter()
             content = (await client.achat([
-                {"role": "system", "content": "你输出的内容将作为小说章节草稿，请严格遵守作品设定，只输出正文。"},
+                {"role": "system", "content": get_prompt_template("chapter_content").system},
                 {"role": "user", "content": prompt},
             ], temperature=0.8, max_tokens=_content_max_tokens(plan.expected_words))).strip()
+            log_generation_metric(
+                "model_complete", "chapter_content", (perf_counter() - model_started) * 1000,
+                prompt_chars=len(prompt), output_chars=len(content), model=client.model,
+                expected_words=plan.expected_words,
+            )
     except LLMConfigurationError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -199,6 +373,7 @@ async def generate_chapter_content(
             expected_words=plan.expected_words,
             plan=plan,
             content=content,
+            citations=citations,
         ),
     )
 
@@ -211,22 +386,40 @@ async def stream_chapter_content(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    project, chapter, plan, prompt = await build_context(db, project_id, chapter_id, user.id, payload)
+    context_started = perf_counter()
+    project, chapter, plan, prompt, citations = await build_context(db, project_id, chapter_id, user.id, payload)
+    log_generation_metric(
+        "context_built", "chapter_content_stream", (perf_counter() - context_started) * 1000,
+        prompt_chars=len(prompt), expected_words=plan.expected_words,
+    )
 
     async def events():
         total = 0
+        first_chunk_ms = None
+        model_started = perf_counter()
         try:
             async with _generation_client() as client:
                 async for chunk in client.astream([
-                    {"role": "system", "content": "你输出的内容将作为小说章节草稿，只输出正文。"},
+                    {"role": "system", "content": get_prompt_template("chapter_content").system},
                     {"role": "user", "content": prompt},
                 ], temperature=0.8, max_tokens=_content_max_tokens(plan.expected_words)):
+                    if first_chunk_ms is None:
+                        first_chunk_ms = (perf_counter() - model_started) * 1000
                     total += len(chunk)
                     yield sse("chunk", chunk)
+            log_generation_metric(
+                "model_stream_complete", "chapter_content", (perf_counter() - model_started) * 1000,
+                first_chunk_ms=round(first_chunk_ms, 2) if first_chunk_ms is not None else None,
+                prompt_chars=len(prompt), output_chars=total, model=client.model,
+                expected_words=plan.expected_words,
+            )
             if not total:
                 yield sse("error", "模型未返回可用章节内容")
             else:
-                yield sse("done", {"project_id": project.id, "chapter_id": chapter.id, "expected_words": plan.expected_words, "plan": plan.model_dump()})
+                yield sse("done", {
+                    "project_id": project.id, "chapter_id": chapter.id,
+                    "expected_words": plan.expected_words, "plan": plan.model_dump(), "citations": citations,
+                })
         except LLMConfigurationError:
             yield sse("error", "智能生成尚未配置模型，请先配置 LLM_MODEL、LLM_API_KEY 和 LLM_BASE_URL")
         except LLMError:
@@ -272,7 +465,7 @@ async def get_chapter_content_job(job_id: str, user: User = Depends(get_current_
     return success_response(message="获取生成任务状态成功", data={
         "job_id": job.id, "status": job.status, "progress": job.progress,
         "content": job.output_content or "", "expected_words": result.get("expected_words"),
-        "plan": result.get("plan"), "error": job.error_message,
+        "plan": result.get("plan"), "citations": result.get("citations", []), "error": job.error_message,
     })
 
 
@@ -298,6 +491,7 @@ async def list_chapter_content_jobs(
             "content": job.output_content or "",
             "expected_words": (job.result or {}).get("expected_words"),
             "plan": (job.result or {}).get("plan"),
+            "citations": (job.result or {}).get("citations", []),
             "error": job.error_message,
             "created_at": job.created_at.isoformat(),
             "updated_at": job.updated_at.isoformat(),
@@ -369,21 +563,34 @@ async def generate_chapter_memory(
     if not (chapter.content or "").strip():
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="章节正文为空，无法整理摘要")
     user_idea = payload.user_idea if payload else None
-    prompt = (
-        "你是一名小说 continuity 编辑。请从章节正文中提取可供后续章节使用的可靠记忆，只返回合法 JSON，不要 Markdown 代码块。\n"
-        f"作品名称：{project.projectname or '未命名作品'}\n作品类型：{project.project_type or '未指定'}\n"
-        f"作品大纲：{project.outline or '暂未提供'}\n章节编号：第 {chapter.chapter_number} 章\n"
-        f"章节名称：{chapter.chaptername or '未命名章节'}\n章节规划：{chapter.plan or '未提供'}\n"
-        f"用户补充说明：{user_idea or '未提供'}\n章节正文：\n{chapter.content}\n\n"
-        "JSON 必须包含 summary、character_state、setting_changes、unresolved_threads、timeline 五个字符串字段。"
-        "summary 用 100 到 300 字概括本章实际发生的事件；其余字段只记录正文明确出现的事实，未提及时写‘无’。"
+    context_started = perf_counter()
+    memory_template, prompt = render_prompt(
+        "chapter_memory",
+        project_name=project.projectname or "未命名作品",
+        project_type=project.project_type or "未指定",
+        project_outline=project.outline or "暂未提供",
+        chapter_number=chapter.chapter_number,
+        chapter_name=chapter.chaptername or "未命名章节",
+        chapter_plan=chapter.plan or "未提供",
+        user_idea=user_idea or "未提供",
+        content=chapter.content,
+    )
+    log_generation_metric(
+        "context_built", "chapter_memory", (perf_counter() - context_started) * 1000,
+        prompt_chars=len(prompt), input_content_chars=len(chapter.content),
     )
     try:
         async with _generation_client() as client:
+            model_started = perf_counter()
             raw = (await client.achat([
-                {"role": "system", "content": "你只输出合法 JSON，不要补充解释。"},
+                {"role": "system", "content": memory_template.system},
                 {"role": "user", "content": prompt},
             ], temperature=0.2, max_tokens=_memory_max_tokens(chapter.content))).strip()
+            log_generation_metric(
+                "model_complete", "chapter_memory", (perf_counter() - model_started) * 1000,
+                prompt_chars=len(prompt), output_chars=len(raw), model=client.model,
+                max_tokens=_memory_max_tokens(chapter.content),
+            )
     except LLMConfigurationError as error:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="智能生成尚未配置模型，请先配置 LLM_MODEL、LLM_API_KEY 和 LLM_BASE_URL") from error
     except LLMError as error:
@@ -399,6 +606,7 @@ async def generate_chapter_memory(
         })
     except (ValueError, TypeError, KeyError) as error:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="模型返回的章节记忆格式无效，请重试") from error
+    persist_started = perf_counter()
     chapter.summary = summary
     chapter.memory = memory.model_dump()
     await db.commit()
@@ -409,6 +617,10 @@ async def generate_chapter_memory(
         chapter_id=chapter.id,
         chapter_number=chapter.chapter_number,
         memory=memory.model_dump(),
+    )
+    log_generation_metric(
+        "memory_persisted", "chapter_memory", (perf_counter() - persist_started) * 1000,
+        summary_chars=len(summary),
     )
     return success_response(
         message="章节摘要已整理",
@@ -428,25 +640,60 @@ async def generate_chapter_plan(
     chapter = await projects.get_chapter(db, project_id, chapter_id, user.id)
     if project is None or chapter is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品或章节不存在、已删除或不可访问")
-    prompt = (
-        "你是一名专业的中文小说策划编辑，请为指定章节制定可执行的章节规划。只返回 JSON，不要 Markdown 代码块。\n"
-        f"作品名称：{project.projectname or '未命名作品'}\n作品类型：{project.project_type or '未指定'}\n"
-        f"作品简介：{project.introduction or '未提供'}\n作品大纲：{project.outline or '暂未提供'}\n"
-        f"章节编号：第 {chapter.chapter_number} 章\n章节名称：{chapter.chaptername or '未命名章节'}\n"
-        f"目标字数：约 {payload.expected_words} 字\n用户想法：{payload.user_idea or '未提供'}\n\n"
-        "JSON 必须包含字符串字段 objective、conflict、key_events、ending_hook，以及整数 expected_words；"
-        "关键情节要有 3 到 6 个具体事件，结尾钩子要能推动下一章。"
+    context_started = perf_counter()
+    template, prompt = render_prompt(
+        "chapter_plan", project_id=project.id, chapter_id=chapter.id,
+        project_name=project.projectname or "未命名作品",
+        project_type=project.project_type or "未指定",
+        project_introduction=project.introduction or "未提供",
+        project_outline=project.outline or "暂未提供",
+        chapter_number=chapter.chapter_number,
+        chapter_name=chapter.chaptername or "未命名章节",
+        expected_words=payload.expected_words,
+        user_idea=payload.user_idea.strip() if payload.user_idea and payload.user_idea.strip() else "未提供",
+    )
+    skill = load_skill("chapter-planning", task_type="chapter_plan")
+    citations = []
+    if payload.knowledge_base_ids:
+        try:
+            citations = await retrieve_knowledge(
+                db, user_id=user.id, knowledge_base_ids=payload.knowledge_base_ids,
+                query="\n".join((project.projectname or "", chapter.chaptername or "", project.outline or "",
+                                 payload.user_idea or "", str(payload.expected_words))),
+            )
+        except PermissionError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except EmbeddingConfigurationError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except EmbeddingRequestError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        prompt += format_retrieved_context(citations)
+    log_generation_metric(
+        "context_built", "chapter_plan", (perf_counter() - context_started) * 1000,
+        prompt_chars=len(prompt) + len(template.system) + len(skill.instructions),
+        expected_words=payload.expected_words,
     )
     try:
         async with _generation_client() as client:
-            raw = (await client.achat([
-                {"role": "system", "content": "你只输出合法 JSON。"},
+            model_started = perf_counter()
+            raw = await run_agent(client, [
+                {"role": "system", "content": f"{template.system}\n\n创作 Skill（{skill.name} v{skill.version}）：\n{skill.instructions}"},
                 {"role": "user", "content": prompt},
-            ], temperature=0.4, max_tokens=_plan_max_tokens(payload.expected_words))).strip()
+            ], db, project_id=project.id, user_id=user.id,
+                temperature=0.4, max_tokens=_plan_max_tokens(payload.expected_words))
+            log_generation_metric(
+                "agent_complete", "chapter_plan", (perf_counter() - model_started) * 1000,
+                prompt_chars=len(prompt) + len(template.system) + len(skill.instructions),
+                output_chars=len(raw), model=client.model,
+            )
     except LLMConfigurationError as error:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="智能生成尚未配置模型，请先配置 LLM_MODEL、LLM_API_KEY 和 LLM_BASE_URL") from error
     except LLMError as error:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="章节规划生成暂时不可用，请稍后重试") from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Agent 规划过程未能完成，请重试") from error
     try:
         parsed = _json_candidate(raw)
         if not isinstance(parsed, dict):
@@ -459,7 +706,9 @@ async def generate_chapter_plan(
             "ending_hook": _text_value(parsed.get("ending_hook", "")),
             "expected_words": int(parsed.get("expected_words", payload.expected_words)),
         }
-        plan = ChapterPlanGenerationResponse.model_validate({"project_id": project.id, "chapter_id": chapter.id, "plan": parsed})
+        plan = ChapterPlanGenerationResponse.model_validate({
+            "project_id": project.id, "chapter_id": chapter.id, "plan": parsed, "citations": citations,
+        })
     except (ValueError, TypeError) as error:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="模型返回的章节规划格式无效，请重试") from error
     return success_response(message="章节规划生成成功", data=plan)

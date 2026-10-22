@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
@@ -98,7 +98,7 @@ async def update_memory(
         db, project_id, payload.source_chapter_id, user.id,
     ) is None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="来源章节不存在或不属于该作品")
-    updated = await memory_crud.update_project_memory(db, memory, payload)
+    updated = await memory_crud.update_project_memory(db, memory, payload, actor_user_id=user.id)
     return success_response(message="长期记忆已更新", data=StoryMemoryInfo.model_validate(updated))
 
 
@@ -131,6 +131,24 @@ async def review_memory(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有待审核的章节提取记忆可以审核")
     reviewed = await memory_crud.review_project_memory(db, memory, payload.decision, actor_user_id=user.id)
     return success_response(message="长期记忆审核完成", data=StoryMemoryInfo.model_validate(reviewed))
+
+
+@router.post("/{memory_id}/undo")
+async def undo_memory_event(
+    project_id: int = Path(..., gt=0),
+    memory_id: int = Path(..., gt=0),
+    event_id: int | None = Query(default=None, gt=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if await memory_crud.get_project_memory(db, project_id, memory_id, user.id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="长期记忆不存在或不可访问")
+    memory = await memory_crud.undo_project_memory_event(
+        db, project_id=project_id, memory_id=memory_id, actor_user_id=user.id, event_id=event_id,
+    )
+    if memory is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该记忆没有可撤销的最近操作")
+    return success_response(message="长期记忆已回滚", data=StoryMemoryInfo.model_validate(memory))
 
 
 @router.post("/batch-review")

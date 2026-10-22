@@ -13,7 +13,9 @@ import {
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
-import type { Chapter, ChapterMemory, ChapterPlan, ChapterVersion, GenerationJob } from '../types'
+import type { Chapter, ChapterMemory, ChapterPlan, ChapterVersion, GenerationJob, KnowledgeCitation } from '../types'
+import { KnowledgeBaseSelector } from '../components/KnowledgeBaseSelector'
+import { KnowledgeCitationList } from '../components/KnowledgeCitationList'
 
 export function ChapterDetailPage() {
   const { projectId, chapterId, feature } = useParams()
@@ -48,11 +50,14 @@ export function ChapterDetailPage() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [versions, setVersions] = useState<ChapterVersion[]>([])
+  const [compareVersionId, setCompareVersionId] = useState<number | null>(null)
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [versionsLoading, setVersionsLoading] = useState(false)
   const [restoringVersion, setRestoringVersion] = useState<number | null>(null)
   const [retryingJob, setRetryingJob] = useState<string | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<number[]>([])
+  const [knowledgeCitations, setKnowledgeCitations] = useState<KnowledgeCitation[]>([])
 
   const loadChapter = useCallback(async () => {
     const project = Number(projectId)
@@ -281,15 +286,18 @@ export function ChapterDetailPage() {
       setEditing(false)
       setNotice('章节修改已保存')
       if (shouldRefreshMemory && api.generateChapterMemory) {
-        try {
-          const memory = await api.generateChapterMemory(chapter.project_id, chapter.id)
-          setChapter(current => (current ? { ...current, summary: memory.summary, memory: memory.memory } : current))
-          setSummaryDraft(memory.summary)
-          setMemoryDraft(memory.memory)
-          setNotice('章节已保存，摘要和前文记忆已更新')
-        } catch {
-          setNotice('章节已保存，但摘要整理失败，可稍后重试')
-        }
+        setNotice('章节已保存，摘要正在整理')
+        void api
+          .generateChapterMemory(chapter.project_id, chapter.id)
+          .then(memory => {
+            setChapter(current => (current ? { ...current, summary: memory.summary, memory: memory.memory } : current))
+            setSummaryDraft(memory.summary)
+            setMemoryDraft(memory.memory)
+            setNotice('章节已保存，摘要和前文记忆已更新')
+          })
+          .catch(() => {
+            setNotice('章节已保存，但摘要整理失败，可稍后重试')
+          })
       }
     } catch (reason) {
       setNotice(reason instanceof Error ? reason.message : '章节保存失败，请稍后重试')
@@ -308,8 +316,11 @@ export function ChapterDetailPage() {
     setPlanGenerating(true)
     setGenerationError('')
     try {
-      const result = await api.generateChapterPlan(chapter.project_id, chapter.id, words, planGenerationIdea)
+      const result = knowledgeBaseIds.length
+        ? await api.generateChapterPlan(chapter.project_id, chapter.id, words, planGenerationIdea, knowledgeBaseIds)
+        : await api.generateChapterPlan(chapter.project_id, chapter.id, words, planGenerationIdea)
       setPlanDraft(result.plan)
+      setKnowledgeCitations(result.citations || [])
       setPlanGenerationOpen(false)
       setNotice('章节规划已生成，请检查后保存章节')
     } catch (reason) {
@@ -344,16 +355,22 @@ export function ChapterDetailPage() {
       const streamGenerator = (
         api as typeof api & { generateChapterContentStream?: typeof api.generateChapterContentStream }
       ).generateChapterContentStream
+      const onChunk = (chunk: string) => {
+        setGenerationProgress(current =>
+          Math.min(99, current + Math.max(1, Math.round((chunk.length / Math.max(1, words)) * 100))),
+        )
+        setDraft(current => ({ ...current, content: current.content + chunk }))
+      }
       const result =
         typeof streamGenerator === 'function'
-          ? await streamGenerator(chapter.project_id, chapter.id, plan, generationIdea, chunk => {
-              setGenerationProgress(current =>
-                Math.min(99, current + Math.max(1, Math.round((chunk.length / Math.max(1, words)) * 100))),
-              )
-              setDraft(current => ({ ...current, content: current.content + chunk }))
-            })
-          : await api.generateChapterContent(chapter.project_id, chapter.id, plan, generationIdea)
+          ? knowledgeBaseIds.length
+            ? await streamGenerator(chapter.project_id, chapter.id, plan, generationIdea, onChunk, knowledgeBaseIds)
+            : await streamGenerator(chapter.project_id, chapter.id, plan, generationIdea, onChunk)
+          : knowledgeBaseIds.length
+            ? await api.generateChapterContent(chapter.project_id, chapter.id, plan, generationIdea, knowledgeBaseIds)
+            : await api.generateChapterContent(chapter.project_id, chapter.id, plan, generationIdea)
       setDraft(current => ({ ...current, content: result.content }))
+      setKnowledgeCitations(result.citations || [])
       setGenerationDialogOpen(false)
       setNotice('章节正文已生成，请检查后点击“保存修改”入库')
     } catch (reason) {
@@ -500,6 +517,67 @@ export function ChapterDetailPage() {
                 </section>
               ) : (
                 <section className="generation-history-panel chapter-version-panel">
+                  {compareVersionId !== null &&
+                    chapter &&
+                    (() => {
+                      const compared = versions.find(version => version.id === compareVersionId)
+                      if (!compared) return null
+                      const fields = [
+                        {
+                          label: '章节名称',
+                          oldValue: compared.chaptername || '',
+                          newValue: chapter.chaptername || '',
+                        },
+                        {
+                          label: '章节编号',
+                          oldValue: String(compared.chapter_number),
+                          newValue: String(chapter.chapter_number),
+                        },
+                        { label: '正文', oldValue: compared.content || '', newValue: chapter.content || '' },
+                        {
+                          label: '章节规划',
+                          oldValue: JSON.stringify(compared.plan || null, null, 2) || '',
+                          newValue: JSON.stringify(chapter.plan || null, null, 2) || '',
+                        },
+                        { label: '摘要', oldValue: compared.summary || '', newValue: chapter.summary || '' },
+                        {
+                          label: '章节记忆',
+                          oldValue: JSON.stringify(compared.memory || null, null, 2) || '',
+                          newValue: JSON.stringify(chapter.memory || null, null, 2) || '',
+                        },
+                      ]
+                      const changedCount = fields.filter(field => field.oldValue !== field.newValue).length
+                      return (
+                        <section className="chapter-version-comparison" aria-label="版本对比">
+                          <div className="section-heading">
+                            <div>
+                              <h2>版本 {compared.version_number} 与当前章节对比</h2>
+                              <p>{changedCount === 0 ? '两个版本内容一致' : `${changedCount} 项内容有变化`}</p>
+                            </div>
+                            <button className="text-link" type="button" onClick={() => setCompareVersionId(null)}>
+                              关闭对比
+                            </button>
+                          </div>
+                          {fields
+                            .filter(field => field.oldValue !== field.newValue)
+                            .map(field => (
+                              <div className="chapter-version-diff" key={field.label}>
+                                <h3>{field.label}</h3>
+                                <div>
+                                  <section>
+                                    <strong>版本 {compared.version_number}</strong>
+                                    <pre>{field.oldValue || '（空）'}</pre>
+                                  </section>
+                                  <section>
+                                    <strong>当前章节</strong>
+                                    <pre>{field.newValue || '（空）'}</pre>
+                                  </section>
+                                </div>
+                              </div>
+                            ))}
+                        </section>
+                      )
+                    })()}
                   {versionsLoading && <p className="chapter-placeholder">正在加载版本历史…</p>}
                   {!versionsLoading && versions.length === 0 && (
                     <p className="chapter-placeholder">保存章节后会在这里留下版本快照。</p>
@@ -519,6 +597,13 @@ export function ChapterDetailPage() {
                           </p>
                         </div>
                         <div className="generation-history-actions">
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            onClick={() => setCompareVersionId(compareVersionId === version.id ? null : version.id)}
+                          >
+                            {compareVersionId === version.id ? '关闭对比' : '与当前版本对比'}
+                          </button>
                           <button
                             className="secondary-button"
                             type="button"
@@ -643,6 +728,21 @@ export function ChapterDetailPage() {
             <section className="chapter-plan-panel">
               <div className="editor-field-heading">
                 <span>章节规划</span>
+                {editing && (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => {
+                      setPlanGenerationIdea('')
+                      setGenerationError('')
+                      setPlanGenerationOpen(true)
+                    }}
+                    disabled={planGenerating || saving}
+                  >
+                    <Sparkles size={15} />
+                    智能生成规划
+                  </button>
+                )}
               </div>
               {editing ? (
                 <div className="chapter-plan-fields">
@@ -794,6 +894,7 @@ export function ChapterDetailPage() {
           </section>
         </div>
       </div>
+      <KnowledgeCitationList citations={knowledgeCitations} />
       {planGenerationOpen && (
         <div className="modal-backdrop" role="presentation">
           <section
@@ -839,6 +940,7 @@ export function ChapterDetailPage() {
                   placeholder="例如：本章让主角第一次进入遗迹，并在结尾发现敌人留下的信号。"
                 />
               </label>
+              <KnowledgeBaseSelector selectedIds={knowledgeBaseIds} onChange={setKnowledgeBaseIds} />
               {generationError && (
                 <p className="form-message error" role="alert">
                   {generationError}
@@ -908,6 +1010,7 @@ export function ChapterDetailPage() {
                   placeholder="例如：重点描写主角第一次进入遗迹时的紧张感，并在结尾留下新的线索。"
                 />
               </label>
+              <KnowledgeBaseSelector selectedIds={knowledgeBaseIds} onChange={setKnowledgeBaseIds} />
               {generating && (
                 <p className="form-message" role="status">
                   正在生成正文…已接收约 {generationProgress}%

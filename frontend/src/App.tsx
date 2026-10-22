@@ -11,6 +11,8 @@ import { OutlineDetailPage } from './pages/OutlineDetailPage'
 import { RecycleBinPage } from './pages/RecycleBinPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { StoryMemoryPage } from './pages/StoryMemoryPage'
+import { KnowledgeBasesPage } from './pages/KnowledgeBasesPage'
+import { InspirationsPage } from './pages/InspirationsPage'
 
 function ProtectedRoute() {
   const { user, loading } = useAuth()
@@ -38,6 +40,8 @@ export default function App() {
           <Route path="projects/:projectId/outline" element={<OutlineDetailPage />} />
           <Route path="projects/:projectId/outline/:feature" element={<OutlineDetailPage />} />
           <Route path="projects/:projectId/memories" element={<StoryMemoryPage />} />
+          <Route path="knowledge-bases" element={<KnowledgeBasesPage />} />
+          <Route path="inspirations" element={<InspirationsPage />} />
           <Route path="recycle-bin" element={<RecycleBinPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />
