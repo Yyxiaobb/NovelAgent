@@ -1,7 +1,9 @@
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from models.projects import Chapter, Project
+from models.knowledge_base import KnowledgeBase, KnowledgeChunk, KnowledgeDocument
 from crud.projects import recalculate_project_stats
 
 _NO_PROJECT_STATUS = "未设置"
@@ -148,5 +150,51 @@ async def permanently_delete_chapter(db: AsyncSession, chapter_id: int, user_id:
     chapter, project = match
     await db.delete(chapter)
     await _update_chapter_count(db, project)
+    await db.commit()
+    return True
+
+
+async def get_recycled_knowledge_bases(db: AsyncSession, user_id: int):
+    query = select(KnowledgeBase).options(selectinload(KnowledgeBase.documents)).where(
+        KnowledgeBase.user_id == user_id,
+        KnowledgeBase.is_deleted.is_(True),
+    ).order_by(KnowledgeBase.updated_at.desc(), KnowledgeBase.id.desc())
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+async def _get_recycled_knowledge_base(db: AsyncSession, base_id: int, user_id: int):
+    query = select(KnowledgeBase).options(selectinload(KnowledgeBase.documents)).where(
+        KnowledgeBase.id == base_id,
+        KnowledgeBase.user_id == user_id,
+        KnowledgeBase.is_deleted.is_(True),
+    ).with_for_update()
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
+
+
+async def restore_knowledge_base(db: AsyncSession, base_id: int, user_id: int):
+    base = await _get_recycled_knowledge_base(db, base_id, user_id)
+    if base is None:
+        return None
+    base.is_deleted = False
+    await db.commit()
+    await db.refresh(base)
+    return base
+
+
+async def permanently_delete_knowledge_base(db: AsyncSession, base_id: int, user_id: int):
+    query = select(KnowledgeBase).where(
+        KnowledgeBase.id == base_id,
+        KnowledgeBase.user_id == user_id,
+        KnowledgeBase.is_deleted.is_(True),
+    ).with_for_update()
+    base = (await db.execute(query)).scalar_one_or_none()
+    if base is None:
+        return False
+    document_ids = select(KnowledgeDocument.id).where(KnowledgeDocument.knowledge_base_id == base.id)
+    await db.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id.in_(document_ids)))
+    await db.execute(delete(KnowledgeDocument).where(KnowledgeDocument.knowledge_base_id == base.id))
+    await db.delete(base)
     await db.commit()
     return True

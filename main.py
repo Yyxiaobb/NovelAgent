@@ -1,18 +1,22 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import agent, projects, recycle_bin, users
+from fastapi.staticfiles import StaticFiles
+from routers import agent, inspirations, knowledge_bases, projects, recycle_bin, story_memory, users
 from config.db_conf import init_db, close_db
+from utils.media import MEDIA_ROOT
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    await agent.resume_content_jobs()
     yield
     await close_db()
 
 
 app = FastAPI(title="神笔小说创作 API", version="1.0.0", lifespan=lifespan)
+
+MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=MEDIA_ROOT), name="uploads")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -26,6 +30,9 @@ app.include_router(users.router)
 app.include_router(recycle_bin.legacy_router)
 app.include_router(projects.router)
 app.include_router(agent.router)
+app.include_router(inspirations.router)
+app.include_router(story_memory.router)
+app.include_router(knowledge_bases.router)
 app.include_router(recycle_bin.router)
 
 @app.get("/")

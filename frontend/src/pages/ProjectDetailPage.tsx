@@ -1,8 +1,23 @@
-import { ArrowLeft, BookOpenText, CalendarDays, Check, Edit3, FileText, Plus, Save, Trash2, X } from 'lucide-react'
+import {
+  ArrowLeft,
+  BookOpenText,
+  CalendarDays,
+  Check,
+  Download,
+  Edit3,
+  FileText,
+  Plus,
+  Save,
+  Sparkles,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { ChapterActionDialog } from '../components/ChapterActionDialog'
+import { Modal } from '../components/Modal'
 import { ProjectActionDialog } from '../components/ProjectActionDialog'
 import type { Chapter, Project } from '../types'
 
@@ -10,6 +25,15 @@ const numberFormat = new Intl.NumberFormat('zh-CN')
 const dateFormat = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
 const projectTypes = ['玄幻', '都市', '言情', '悬疑', '科幻', '历史', '武侠', '现实', '灵异', '同人', '儿童', '其他']
 const projectStatuses = ['连载中', '完结', '断更'] as const
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(new Error('读取图片失败，请重试'))
+    reader.readAsDataURL(file)
+  })
+}
 
 function chapterTitle(chapter: Chapter) {
   return chapter.chaptername || `第 ${chapter.chapter_number} 章`
@@ -42,6 +66,10 @@ export function ProjectDetailPage() {
   const [chapterSaving, setChapterSaving] = useState<number | null>(null)
   const [newChapter, setNewChapter] = useState<ChapterDraft | null>(null)
   const [newChapterSaving, setNewChapterSaving] = useState(false)
+  const [exportingFormat, setExportingFormat] = useState<'markdown' | 'txt' | null>(null)
+  const [exportDialogOpen, setExportDialogOpen] = useState(false)
+  const [uploadingCover, setUploadingCover] = useState(false)
+  const [generatingCover, setGeneratingCover] = useState(false)
   const [chapterToRecycle, setChapterToRecycle] = useState<Chapter | null>(null)
   const [recycleProjectOpen, setRecycleProjectOpen] = useState(false)
 
@@ -187,6 +215,73 @@ export function ProjectDetailPage() {
     }
   }
 
+  async function exportProject(format: 'markdown' | 'txt') {
+    if (!project) return
+    setExportingFormat(format)
+    setExportDialogOpen(false)
+    setNotice('')
+    try {
+      const blob = await api.exportProject(project.id, format)
+      const objectUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const safeName = [...(project.projectname || '未命名作品')]
+        .map(character => (/[\\/:*?"<>|]/.test(character) || character.charCodeAt(0) < 32 ? '_' : character))
+        .join('')
+        .trim()
+      link.href = objectUrl
+      link.download = `${safeName || '未命名作品'}.${format === 'markdown' ? 'md' : 'txt'}`
+      document.body.append(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+      setNotice(`作品已导出为 ${format === 'markdown' ? 'Markdown' : 'TXT'}`)
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '作品导出失败，请稍后重试')
+    } finally {
+      setExportingFormat(null)
+    }
+  }
+
+  async function uploadCover(file?: File) {
+    if (!file || !project) return
+    if (!file.type.startsWith('image/')) {
+      setNotice('请选择图片文件')
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setNotice('封面图片不能超过 5 MB')
+      return
+    }
+    setUploadingCover(true)
+    setNotice('')
+    try {
+      const uploaded = await api.uploadProjectCover(project.id, await readFileAsDataUrl(file), file.name)
+      setProject(uploaded)
+      setProjectDraft(current => ({ ...current, coverUrl: uploaded.cover_url || '' }))
+      setNotice('作品封面已上传')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '封面上传失败，请稍后重试')
+    } finally {
+      setUploadingCover(false)
+    }
+  }
+
+  async function generateCover() {
+    if (!project) return
+    setGeneratingCover(true)
+    setNotice('正在根据作品内容生成封面…')
+    try {
+      const generated = await api.generateProjectCover(project.id)
+      setProject(generated)
+      setProjectDraft(current => ({ ...current, coverUrl: generated.cover_url || '' }))
+      setNotice('智能封面已生成')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '智能封面生成失败，请稍后重试')
+    } finally {
+      setGeneratingCover(false)
+    }
+  }
+
   if (loading)
     return (
       <div className="page">
@@ -244,10 +339,21 @@ export function ProjectDetailPage() {
               </button>
             </>
           ) : (
-            <button className="primary-button" type="button" onClick={() => setEditing(true)}>
-              <Edit3 size={15} />
-              编辑作品
-            </button>
+            <>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setExportDialogOpen(true)}
+                disabled={exportingFormat !== null}
+              >
+                <Download size={15} />
+                {exportingFormat ? '正在导出…' : '导出'}
+              </button>
+              <button className="primary-button" type="button" onClick={() => setEditing(true)}>
+                <Edit3 size={15} />
+                编辑作品
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -257,19 +363,21 @@ export function ProjectDetailPage() {
         </div>
       )}
       <section className="project-detail-hero">
-        <div className="project-detail-cover" aria-label="作品封面">
-          {(editing ? projectDraft.coverUrl : project.cover_url) ? (
-            <img
-              src={(editing ? projectDraft.coverUrl : project.cover_url) || ''}
-              alt={`${project.projectname || '未命名作品'}封面`}
-            />
-          ) : (
-            <div className="project-cover-placeholder">
-              <BookOpenText size={42} />
-              <strong>{(editing ? projectDraft.name : project.projectname || '未').slice(0, 1) || '未'}</strong>
-              <span>墨笺作品</span>
-            </div>
-          )}
+        <div className="project-detail-cover-column">
+          <div className="project-detail-cover" aria-label="作品封面">
+            {(editing ? projectDraft.coverUrl : project.cover_url) ? (
+              <img
+                src={(editing ? projectDraft.coverUrl : project.cover_url) || ''}
+                alt={`${project.projectname || '未命名作品'}封面`}
+              />
+            ) : (
+              <div className="project-cover-placeholder">
+                <BookOpenText size={42} />
+                <strong>{(editing ? projectDraft.name : project.projectname || '未').slice(0, 1) || '未'}</strong>
+                <span>墨笺作品</span>
+              </div>
+            )}
+          </div>
           {editing && (
             <label className="detail-cover-input">
               <span>封面地址</span>
@@ -279,6 +387,33 @@ export function ProjectDetailPage() {
                 placeholder="https://example.com/cover.jpg"
                 aria-label="封面地址"
               />
+              <div className="cover-edit-actions">
+                <label className="cover-upload-button">
+                  <Upload size={13} />
+                  {uploadingCover ? '上传中…' : '本地上传'}
+                  <input
+                    className="visually-hidden-file-input"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    onChange={event => {
+                      void uploadCover(event.target.files?.[0])
+                      event.currentTarget.value = ''
+                    }}
+                    disabled={uploadingCover || generatingCover}
+                    aria-label="本地上传作品封面"
+                  />
+                </label>
+                <button
+                  className="cover-generate-button"
+                  type="button"
+                  onClick={() => void generateCover()}
+                  disabled={uploadingCover || generatingCover}
+                >
+                  <Sparkles size={13} />
+                  {generatingCover ? '生成中…' : '根据内容生成'}
+                </button>
+              </div>
+              <small className="cover-input-hint">支持 PNG、JPG、WEBP、GIF，单张不超过 5 MB</small>
             </label>
           )}
         </div>
@@ -377,6 +512,9 @@ export function ProjectDetailPage() {
         </div>
         <Link className="secondary-button" to={`/projects/${project.id}/outline`}>
           进入大纲详情
+        </Link>
+        <Link className="secondary-button" to={`/projects/${project.id}/memories`}>
+          管理长期记忆
         </Link>
       </section>
 
@@ -535,6 +673,46 @@ export function ProjectDetailPage() {
           移入回收站
         </button>
       </div>
+      <Modal
+        open={exportDialogOpen}
+        title="选择导出格式"
+        onClose={() => setExportDialogOpen(false)}
+        busy={exportingFormat !== null}
+      >
+        <div className="modal-body export-format-body">
+          <p className="export-format-help">选择一种格式下载当前作品及章节内容。</p>
+          <div className="export-format-options">
+            <button
+              className="export-format-option"
+              type="button"
+              onClick={() => void exportProject('markdown')}
+              disabled={exportingFormat !== null}
+            >
+              <span className="export-format-icon">
+                <FileText size={19} />
+              </span>
+              <span>
+                <strong>Markdown</strong>
+                <small>适合继续编辑或发布到支持 Markdown 的平台</small>
+              </span>
+            </button>
+            <button
+              className="export-format-option"
+              type="button"
+              onClick={() => void exportProject('txt')}
+              disabled={exportingFormat !== null}
+            >
+              <span className="export-format-icon">
+                <FileText size={19} />
+              </span>
+              <span>
+                <strong>TXT 纯文本</strong>
+                <small>适合在各类阅读器和文字工具中打开</small>
+              </span>
+            </button>
+          </div>
+        </div>
+      </Modal>
       <ProjectActionDialog
         project={recycleProjectOpen ? project : null}
         action="recycle"

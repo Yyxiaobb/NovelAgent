@@ -1,0 +1,72 @@
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+MemoryCategory = Literal["character", "world", "thread", "timeline"]
+
+
+class StoryMemoryRequest(BaseModel):
+    category: MemoryCategory
+    title: str = Field(..., min_length=1, max_length=100)
+    content: str = Field(..., min_length=1, max_length=10000)
+    keywords: list[str] = Field(default_factory=list, max_length=30)
+    source_chapter_id: int | None = Field(default=None, gt=0)
+    is_active: bool = True
+
+
+class StoryMemoryInfo(BaseModel):
+    id: int
+    project_id: int
+    category: MemoryCategory
+    title: str
+    content: str
+    keywords: list[str]
+    source_chapter_id: int | None
+    is_active: bool
+    review_status: Literal["pending", "approved", "rejected"]
+    origin: Literal["manual", "chapter_extract"]
+    merged_into_id: int | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StoryMemoryReviewRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+
+
+class StoryMemoryBatchReviewRequest(BaseModel):
+    memory_ids: list[int] = Field(..., min_length=1, max_length=100)
+    decision: Literal["approved", "rejected"]
+
+
+class StoryMemoryConflictInfo(BaseModel):
+    first_id: int
+    second_id: int
+    category: MemoryCategory
+    similarity: float
+    reason: Literal["same_title", "shared_keywords", "similar_content"]
+
+
+class StoryMemoryMergeRequest(BaseModel):
+    target_id: int = Field(..., gt=0)
+    source_ids: list[int] = Field(..., min_length=1, max_length=30)
+
+
+class StoryMemoryEventInfo(BaseModel):
+    id: int
+    project_id: int
+    actor_user_id: int
+    event_type: Literal[
+        "review", "batch_review", "merge", "update",
+        "undo_review", "undo_batch_review", "undo_merge", "undo_update",
+    ]
+    memory_id: int | None
+    related_memory_ids: list[int]
+    details: dict
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

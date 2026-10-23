@@ -8,8 +8,8 @@ def response(*, code: int = 200, message: str = "success", data: Any = None, htt
     content = {"code": code, "message": message, "data": data}
     return JSONResponse(content=jsonable_encoder(content), status_code=http_status)
 
-def success_response(message: str = "success", data: Any = None) -> JSONResponse:
-    return response(code=200, message=message, data=data)
+def success_response(message: str = "success", data: Any = None, *, http_status: int = 200) -> JSONResponse:
+    return response(code=200, message=message, data=data, http_status=http_status)
 
 def error_response(message: str = "error", code: int = 500, data: Any = None) -> JSONResponse:
     return response(code=code, message=message, data=data)

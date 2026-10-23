@@ -6,10 +6,18 @@ import type {
   ChapterPlan,
   ChapterVersion,
   GenerationJob,
+  KnowledgeBase,
+  KnowledgeDocument,
+  KnowledgeCitation,
+  Inspiration,
   OutlineVersion,
   ProfilePayload,
   Project,
   RecycledChapter,
+  StoryMemoryEntry,
+  StoryMemoryEvent,
+  StoryMemoryConflict,
+  StoryMemoryPayload,
   User,
 } from '../types'
 
@@ -64,7 +72,7 @@ async function streamChapterContent(
   path: string,
   body: unknown,
   onChunk?: (chunk: string) => void,
-): Promise<{ content: string; meta: { expected_words: number; plan: ChapterPlan } }> {
+): Promise<{ content: string; meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[] } }> {
   const token = localStorage.getItem(TOKEN_KEY)
   const headers = new Headers({ 'Content-Type': 'application/json' })
   if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -77,7 +85,7 @@ async function streamChapterContent(
   const decoder = new TextDecoder()
   let buffer = ''
   let content = ''
-  let meta: { expected_words: number; plan: ChapterPlan } | null = null
+  let meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[] } | null = null
   const consume = (block: string) => {
     const line = block.split('\n').find(item => item.startsWith('data:'))
     if (!line) return
@@ -120,6 +128,11 @@ export const api = {
   getProfile: () => request<User>('/api/user/info'),
   updateProfile: (payload: ProfilePayload) =>
     request<User>('/api/user/update', { method: 'PUT', body: JSON.stringify(payload) }),
+  uploadAvatar: (dataUrl: string, filename: string) =>
+    request<User>('/api/user/avatar/upload', {
+      method: 'POST',
+      body: JSON.stringify({ data_url: dataUrl, filename }),
+    }),
   changePassword: (oldPassword: string, newPassword: string) =>
     request<null>('/api/user/password', {
       method: 'PUT',
@@ -127,7 +140,99 @@ export const api = {
     }),
   logout: () => request<null>('/api/user/logout', { method: 'POST' }),
   getProjects: () => request<Project[]>('/api/project/projects'),
+  getInspirations: () => request<Inspiration[]>('/api/inspirations'),
+  createInspiration: (title: string, content: string) =>
+    request<Inspiration>('/api/inspirations', {
+      method: 'POST',
+      body: JSON.stringify({ title, content }),
+    }),
+  updateInspiration: (id: number, title: string, content: string, refinedContent: string | null) =>
+    request<Inspiration>(`/api/inspirations/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ title, content, refined_content: refinedContent }),
+    }),
+  refineInspiration: (id: number) => request<Inspiration>(`/api/inspirations/${id}/refine`, { method: 'POST' }),
+  deleteInspiration: (id: number) =>
+    request<{ id: number; is_deleted: boolean }>(`/api/inspirations/${id}`, { method: 'DELETE' }),
+  getKnowledgeBases: () => request<KnowledgeBase[]>('/api/knowledge-bases'),
+  createKnowledgeBase: (name: string, description: string) =>
+    request<KnowledgeBase>('/api/knowledge-bases', {
+      method: 'POST',
+      body: JSON.stringify({ name, description: description || null }),
+    }),
+  deleteKnowledgeBase: (baseId: number) =>
+    request<{ id: number }>(`/api/knowledge-bases/${baseId}`, { method: 'DELETE' }),
+  getKnowledgeDocuments: (baseId: number) => request<KnowledgeDocument[]>(`/api/knowledge-bases/${baseId}/documents`),
+  createKnowledgeDocument: (baseId: number, filename: string, content: string) =>
+    request<KnowledgeDocument>(`/api/knowledge-bases/${baseId}/documents`, {
+      method: 'POST',
+      body: JSON.stringify({ filename, content }),
+    }),
+  deleteKnowledgeDocument: (baseId: number, documentId: number) =>
+    request<{ id: number }>(`/api/knowledge-bases/${baseId}/documents/${documentId}`, { method: 'DELETE' }),
+  retryKnowledgeDocument: (baseId: number, documentId: number) =>
+    request<KnowledgeDocument>(`/api/knowledge-bases/${baseId}/documents/${documentId}/retry`, { method: 'POST' }),
   getProject: (projectId: number) => request<Project>(`/api/project/detail/${projectId}`),
+  uploadProjectCover: (projectId: number, dataUrl: string, filename: string) =>
+    request<Project>(`/api/project/${projectId}/cover/upload`, {
+      method: 'POST',
+      body: JSON.stringify({ data_url: dataUrl, filename }),
+    }),
+  generateProjectCover: (projectId: number) =>
+    request<Project>(`/api/agent/projects/${projectId}/cover`, { method: 'POST' }),
+  getProjectMemories: (projectId: number) => request<StoryMemoryEntry[]>(`/api/project/${projectId}/memories`),
+  getProjectMemoryConflicts: (projectId: number) =>
+    request<StoryMemoryConflict[]>(`/api/project/${projectId}/memories/conflicts`),
+  getProjectMemoryEvents: (projectId: number, limit = 50) =>
+    request<StoryMemoryEvent[]>(`/api/project/${projectId}/memories/events?limit=${limit}`),
+  createProjectMemory: (projectId: number, payload: StoryMemoryPayload) =>
+    request<StoryMemoryEntry>(`/api/project/${projectId}/memories`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateProjectMemory: (projectId: number, memoryId: number, payload: StoryMemoryPayload) =>
+    request<StoryMemoryEntry>(`/api/project/${projectId}/memories/${memoryId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  deleteProjectMemory: (projectId: number, memoryId: number) =>
+    request<{ id: number }>(`/api/project/${projectId}/memories/${memoryId}`, { method: 'DELETE' }),
+  reviewProjectMemory: (projectId: number, memoryId: number, decision: 'approved' | 'rejected') =>
+    request<StoryMemoryEntry>(`/api/project/${projectId}/memories/${memoryId}/review`, {
+      method: 'POST',
+      body: JSON.stringify({ decision }),
+    }),
+  undoProjectMemory: (projectId: number, memoryId: number, eventId?: number) =>
+    request<StoryMemoryEntry>(
+      `/api/project/${projectId}/memories/${memoryId}/undo${eventId ? `?event_id=${eventId}` : ''}`,
+      { method: 'POST' },
+    ),
+  batchReviewProjectMemories: (projectId: number, memoryIds: number[], decision: 'approved' | 'rejected') =>
+    request<StoryMemoryEntry[]>(`/api/project/${projectId}/memories/batch-review`, {
+      method: 'POST',
+      body: JSON.stringify({ memory_ids: memoryIds, decision }),
+    }),
+  mergeProjectMemories: (projectId: number, targetId: number, sourceIds: number[]) =>
+    request<StoryMemoryEntry>(`/api/project/${projectId}/memories/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ target_id: targetId, source_ids: sourceIds }),
+    }),
+  exportProject: async (projectId: number, format: 'markdown' | 'txt'): Promise<Blob> => {
+    const token = localStorage.getItem(TOKEN_KEY)
+    const headers = new Headers()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    let response: Response
+    try {
+      response = await fetch(`/api/project/${projectId}/export/${format}`, { headers, credentials: 'include' })
+    } catch {
+      throw new ApiError('无法连接服务器，请确认后端服务已启动')
+    }
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new ApiError(errorMessage(payload), response.status)
+    }
+    return response.blob()
+  },
   getProjectChapters: (projectId: number) => request<Chapter[]>(`/api/project/${projectId}/chapters`),
   getProjectOutline: (projectId: number) =>
     request<{ project_id: number; outline: string | null }>(`/api/project/${projectId}/outline`),
@@ -143,38 +248,63 @@ export const api = {
       `/api/project/${projectId}/outline/versions/${versionId}/restore`,
       { method: 'POST' },
     ),
-  generateProjectOutline: (projectId: number, expectedWords: number, userIdea = '') =>
-    request<{ project_id: number; expected_words: number; outline: string }>(
+  generateProjectOutline: (projectId: number, expectedWords: number, userIdea = '', knowledgeBaseIds: number[] = []) =>
+    request<{ project_id: number; expected_words: number; outline: string; citations?: KnowledgeCitation[] }>(
       `/api/agent/projects/${projectId}/outline`,
       {
         method: 'POST',
-        body: JSON.stringify({ expected_words: expectedWords, user_idea: userIdea }),
+        body: JSON.stringify({
+          expected_words: expectedWords,
+          user_idea: userIdea,
+          knowledge_base_ids: knowledgeBaseIds,
+        }),
       },
     ),
-  generateChapterPlan: (projectId: number, chapterId: number, expectedWords = 3000, userIdea = '') =>
-    request<{ project_id: number; chapter_id: number; plan: ChapterPlan }>(
+  generateChapterPlan: (
+    projectId: number,
+    chapterId: number,
+    expectedWords = 3000,
+    userIdea = '',
+    knowledgeBaseIds: number[] = [],
+  ) =>
+    request<{ project_id: number; chapter_id: number; plan: ChapterPlan; citations?: KnowledgeCitation[] }>(
       `/api/agent/projects/${projectId}/chapters/${chapterId}/plan`,
       {
         method: 'POST',
-        body: JSON.stringify({ expected_words: expectedWords, user_idea: userIdea }),
+        body: JSON.stringify({
+          expected_words: expectedWords,
+          user_idea: userIdea,
+          knowledge_base_ids: knowledgeBaseIds,
+        }),
       },
     ),
-  generateChapterContent: (projectId: number, chapterId: number, plan: ChapterPlan, userIdea = '') =>
-    request<{ project_id: number; chapter_id: number; expected_words: number; plan: ChapterPlan; content: string }>(
-      `/api/agent/projects/${projectId}/chapters/${chapterId}/content`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ plan, user_idea: userIdea }),
-      },
-    ),
+  generateChapterContent: (
+    projectId: number,
+    chapterId: number,
+    plan: ChapterPlan,
+    userIdea = '',
+    knowledgeBaseIds: number[] = [],
+  ) =>
+    request<{
+      project_id: number
+      chapter_id: number
+      expected_words: number
+      plan: ChapterPlan
+      content: string
+      citations?: KnowledgeCitation[]
+    }>(`/api/agent/projects/${projectId}/chapters/${chapterId}/content`, {
+      method: 'POST',
+      body: JSON.stringify({ plan, user_idea: userIdea, knowledge_base_ids: knowledgeBaseIds }),
+    }),
   generateChapterContentStream: async (
     projectId: number,
     chapterId: number,
     plan: ChapterPlan,
     userIdea = '',
     onChunk?: (chunk: string) => void,
+    knowledgeBaseIds: number[] = [],
   ) => {
-    const body = { plan, user_idea: userIdea }
+    const body = { plan, user_idea: userIdea, knowledge_base_ids: knowledgeBaseIds }
     if (plan.expected_words < 5000) {
       const result = await streamChapterContent(
         `/api/agent/projects/${projectId}/chapters/${chapterId}/content/stream`,
@@ -187,6 +317,7 @@ export const api = {
         expected_words: result.meta.expected_words,
         plan: result.meta.plan,
         content: result.content,
+        citations: result.meta.citations || [],
       }
     }
     const task = await request<{ job_id: string }>(
@@ -200,6 +331,7 @@ export const api = {
         progress: number
         content?: string
         plan?: ChapterPlan
+        citations?: KnowledgeCitation[]
         expected_words?: number
         error?: string
       }>(`/api/agent/chapter-content/jobs/${task.job_id}`)
@@ -215,6 +347,7 @@ export const api = {
           expected_words: status.expected_words || plan.expected_words,
           plan: status.plan || plan,
           content: nextContent,
+          citations: status.citations || [],
         }
       if (status.status === 'failed') throw new ApiError(status.error || '章节生成失败，请稍后重试')
       if (status.status === 'cancelled') throw new ApiError('生成任务已取消，可在生成历史中重新生成')
@@ -281,6 +414,8 @@ export const api = {
     }),
   getRecycledProjects: () => request<Project[]>('/api/recycle-bin/projects'),
   getRecycledChapters: () => request<RecycledChapter[]>('/api/recycle-bin/chapters'),
+  getRecycledKnowledgeBases: () => request<KnowledgeBase[]>('/api/recycle-bin/knowledge-bases'),
+  getRecycledInspirations: () => request<Inspiration[]>('/api/recycle-bin/inspirations'),
   recycleProject: (projectId: number) =>
     request<Project>(`/api/recycle-bin/projects/${projectId}/trash`, { method: 'POST' }),
   restoreProject: (projectId: number) =>
@@ -293,6 +428,14 @@ export const api = {
     request<Chapter>(`/api/recycle-bin/chapters/${chapterId}/restore`, { method: 'PUT' }),
   permanentlyDeleteChapter: (chapterId: number) =>
     request<null>(`/api/recycle-bin/chapters/${chapterId}`, { method: 'DELETE' }),
+  restoreKnowledgeBase: (baseId: number) =>
+    request<KnowledgeBase>(`/api/recycle-bin/knowledge-bases/${baseId}/restore`, { method: 'PUT' }),
+  permanentlyDeleteKnowledgeBase: (baseId: number) =>
+    request<null>(`/api/recycle-bin/knowledge-bases/${baseId}`, { method: 'DELETE' }),
+  restoreInspiration: (id: number) =>
+    request<Inspiration>(`/api/recycle-bin/inspirations/${id}/restore`, { method: 'PUT' }),
+  permanentlyDeleteInspiration: (id: number) =>
+    request<null>(`/api/recycle-bin/inspirations/${id}`, { method: 'DELETE' }),
   createProject: (projectname: string, introduction: string, project_type: string) =>
     request<Project>('/api/project/newProject', {
       method: 'POST',
@@ -307,5 +450,10 @@ export const api = {
     request<{ field: string; value: string }>('/api/agent/project-field', {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+  refineIdea: (idea: string) =>
+    request<{ idea: string; refined_idea: string }>('/api/agent/refine-idea', {
+      method: 'POST',
+      body: JSON.stringify({ idea }),
     }),
 }

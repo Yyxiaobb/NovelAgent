@@ -74,7 +74,7 @@ afterEach(cleanup)
 describe('回收站页面', () => {
   it('作品页右上角不再重复显示回收站入口', async () => {
     renderPage('/projects')
-    await screen.findByRole('heading', { name: '作品集还是空的' })
+    await screen.findByRole('heading', { name: '当前暂无作品，快去创建你的第一个作品吧！' })
     const header = screen.getByRole('heading', { name: '我的作品' }).closest('header')!
     expect(within(header).queryByRole('link', { name: '回收站' })).toBeNull()
     expect(within(header).getByRole('button', { name: '新建作品' })).toBeTruthy()

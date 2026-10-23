@@ -24,8 +24,8 @@ afterEach(cleanup)
 
 describe('新建作品入口', () => {
   it.each([
-    ['工作台', '/', '还没有作品', 'link'],
-    ['作品页', '/projects', '作品集还是空的', 'button'],
+    ['工作台', '/', '当前暂无作品，快去创建你的第一个作品吧！', 'link'],
+    ['作品页', '/projects', '当前暂无作品，快去创建你的第一个作品吧！', 'button'],
   ])('%s 仅保留右上角入口，点击仍能打开新建弹窗', async (_page, path, emptyHeading, role) => {
     const { container } = render(
       <MemoryRouter initialEntries={[path]}>

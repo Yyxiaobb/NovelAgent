@@ -1,24 +1,28 @@
 import {
   BookOpen,
+  BookOpenCheck,
   FolderKanban,
   LayoutDashboard,
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
+  Sparkles,
+  Sun,
+  Moon,
   Trash2,
-  UserRound,
 } from 'lucide-react'
 import { NavLink, Outlet, useLocation, useSearchParams } from 'react-router-dom'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { ProjectCreationModal } from './ProjectCreationModal'
 
 const navigation = [
   { to: '/', label: '工作台', icon: LayoutDashboard, end: true },
   { to: '/projects', label: '作品', icon: FolderKanban },
+  { to: '/knowledge-bases', label: '知识库', icon: BookOpenCheck },
+  { to: '/inspirations', label: '灵感', icon: Sparkles },
   { to: '/recycle-bin', label: '回收站', icon: Trash2 },
-  { to: '/profile', label: '资料', icon: UserRound },
   { to: '/settings', label: '设置', icon: Settings },
 ]
 
@@ -35,10 +39,26 @@ function Avatar() {
 export function AppShell() {
   const { user, logout } = useAuth()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      return window.localStorage.getItem('novel-agent-theme') === 'light' ? 'light' : 'dark'
+    } catch {
+      return 'dark'
+    }
+  })
   const { pathname } = useLocation()
   const detailMode = /^\/projects\/[^/]+\/(?:outline(?:\/[^/]+)?|chapters\/[^/]+(?:\/[^/]+)?)$/.test(pathname)
   const [searchParams, setSearchParams] = useSearchParams()
   const creationOpen = searchParams.get('create') === '1'
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    try {
+      window.localStorage.setItem('novel-agent-theme', theme)
+    } catch {
+      // Keep the current selection for this session when storage is unavailable.
+    }
+  }, [theme])
 
   function closeCreation() {
     setSearchParams({}, { replace: true })
@@ -94,11 +114,17 @@ export function AppShell() {
             </nav>
 
             <div className="sidebar-user">
-              <Avatar />
-              <div className="sidebar-user-copy">
-                <strong>{user?.nickname || user?.username}</strong>
-                <small>@{user?.username}</small>
-              </div>
+              <NavLink
+                to="/profile"
+                className={({ isActive }) => (isActive ? 'sidebar-user-profile active' : 'sidebar-user-profile')}
+                aria-label="打开个人资料"
+              >
+                <Avatar />
+                <div className="sidebar-user-copy">
+                  <strong>{user?.nickname || user?.username}</strong>
+                  <small>@{user?.username}</small>
+                </div>
+              </NavLink>
               <button
                 className="icon-button sidebar-logout"
                 type="button"
@@ -116,6 +142,29 @@ export function AppShell() {
       <main className="main-content">
         <Outlet />
       </main>
+
+      <div className="theme-switcher" role="group" aria-label="选择页面色调">
+        <button
+          className={theme === 'light' ? 'theme-option active' : 'theme-option'}
+          type="button"
+          aria-pressed={theme === 'light'}
+          onClick={() => setTheme('light')}
+          title="切换到亮色"
+        >
+          <Sun size={15} />
+          <span>亮色</span>
+        </button>
+        <button
+          className={theme === 'dark' ? 'theme-option active' : 'theme-option'}
+          type="button"
+          aria-pressed={theme === 'dark'}
+          onClick={() => setTheme('dark')}
+          title="切换到暗色"
+        >
+          <Moon size={15} />
+          <span>暗色</span>
+        </button>
+      </div>
 
       <ProjectCreationModal
         open={creationOpen}

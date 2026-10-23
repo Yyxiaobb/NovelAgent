@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from config.db_conf import ASYNC_DATABASE_URL, Base
 
 # Register every model before Alembic inspects metadata.
-from models import generation, outline_versions, projects, users, versions  # noqa: F401,E402
+from models import generation, inspiration, knowledge_base, outline_versions, projects, story_memory, users, versions  # noqa: F401,E402
 
 
 config = context.config

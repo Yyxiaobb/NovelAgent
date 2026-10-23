@@ -69,7 +69,18 @@ def upgrade() -> None:
     if numbering_constraint is not None:
         chapter_table.constraints.remove(numbering_constraint)
     try:
-        Base.metadata.create_all(bind=bind)
+        # Later versioned tables are intentionally excluded from the baseline;
+        # their dedicated revisions create them in order.
+        later_tables = {
+            "story_memories",
+            "story_memory_events",
+            "knowledge_bases",
+            "knowledge_documents",
+            "knowledge_chunks",
+            "inspirations",
+        }
+        baseline_tables = [table for table in Base.metadata.sorted_tables if table.name not in later_tables]
+        Base.metadata.create_all(bind=bind, tables=baseline_tables)
     finally:
         if numbering_constraint is not None:
             chapter_table.append_constraint(numbering_constraint)

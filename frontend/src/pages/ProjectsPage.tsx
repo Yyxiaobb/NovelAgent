@@ -124,11 +124,8 @@ export function ProjectsPage() {
       </div>
 
       {error ? (
-        <div className="empty-state">
+        <div className="form-message error" role="alert">
           <p>{error}</p>
-          <button className="secondary-button" onClick={loadProjects}>
-            重新加载
-          </button>
         </div>
       ) : loading ? (
         <div className="project-grid skeleton-grid">
@@ -139,8 +136,8 @@ export function ProjectsPage() {
       ) : filteredProjects.length === 0 ? (
         <div className="empty-state">
           <BookOpenText size={32} />
-          <h3>{query ? '没有匹配的作品' : '作品集还是空的'}</h3>
-          <p>{query ? '换一个关键词试试。' : '创建作品后，可在这里查看创作进度。'}</p>
+          <h3>{query ? '没有匹配的作品' : '当前暂无作品，快去创建你的第一个作品吧！'}</h3>
+          {query && <p>换一个关键词试试。</p>}
         </div>
       ) : (
         <div className="project-grid">

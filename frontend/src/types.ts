@@ -15,6 +15,16 @@ export interface AuthData {
   userInfo: User
 }
 
+export interface Inspiration {
+  id: number
+  title: string
+  content: string
+  refined_content: string | null
+  is_deleted?: boolean
+  created_at: string
+  updated_at: string
+}
+
 export interface Project {
   id: number
   projectname: string | null
@@ -59,6 +69,85 @@ export interface ChapterMemory {
   timeline: string
 }
 
+export type StoryMemoryCategory = 'character' | 'world' | 'thread' | 'timeline'
+
+export interface StoryMemoryEntry {
+  id: number
+  project_id: number
+  category: StoryMemoryCategory
+  title: string
+  content: string
+  keywords: string[]
+  source_chapter_id: number | null
+  is_active: boolean
+  review_status: 'pending' | 'approved' | 'rejected'
+  origin: 'manual' | 'chapter_extract'
+  merged_into_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface StoryMemoryPayload {
+  category: StoryMemoryCategory
+  title: string
+  content: string
+  keywords: string[]
+  source_chapter_id: number | null
+  is_active: boolean
+}
+
+export interface StoryMemoryConflict {
+  first_id: number
+  second_id: number
+  category: StoryMemoryCategory
+  similarity: number
+  reason: 'same_title' | 'shared_keywords' | 'similar_content'
+}
+
+export interface StoryMemoryEvent {
+  id: number
+  project_id: number
+  actor_user_id: number
+  event_type:
+    'review' | 'batch_review' | 'merge' | 'update' | 'undo_review' | 'undo_batch_review' | 'undo_merge' | 'undo_update'
+  memory_id: number | null
+  related_memory_ids: number[]
+  details: Record<string, unknown>
+  created_at: string
+}
+
+export interface KnowledgeBase {
+  id: number
+  name: string
+  description: string | null
+  document_count: number
+  ready_document_count: number
+  created_at: string
+  updated_at: string
+  is_deleted?: boolean
+}
+
+export interface KnowledgeDocument {
+  id: number
+  knowledge_base_id: number
+  filename: string
+  status: 'pending' | 'indexing' | 'ready' | 'failed' | string
+  error_message: string | null
+  chunk_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface KnowledgeCitation {
+  knowledge_base_id: number
+  knowledge_base_name: string
+  document_id: number
+  filename: string
+  chunk_index: number
+  similarity: number
+  excerpt: string
+}
+
 export interface GenerationJob {
   job_id: string
   project_id: number
@@ -69,6 +158,7 @@ export interface GenerationJob {
   content: string
   expected_words?: number | null
   plan?: ChapterPlan | null
+  citations?: KnowledgeCitation[]
   error: string | null
   created_at: string
   updated_at: string

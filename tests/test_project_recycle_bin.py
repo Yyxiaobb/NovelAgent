@@ -12,9 +12,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from config import db_conf
 from config.db_conf import Base, get_db
 from models.projects import Chapter, Project
+from models.story_memory import StoryMemory, StoryMemoryEvent
 from models.users import User, UserToken
 from routers.projects import router
-from routers import agent, recycle_bin
+from routers import agent, recycle_bin, story_memory
 
 
 class RecycleBinTestCase(unittest.IsolatedAsyncioTestCase):
@@ -54,6 +55,7 @@ class RecycleBinTestCase(unittest.IsolatedAsyncioTestCase):
         app = FastAPI()
         app.include_router(router)
         app.include_router(agent.router)
+        app.include_router(story_memory.router)
         app.include_router(recycle_bin.router)
         app.include_router(recycle_bin.legacy_router)
         app.dependency_overrides[get_db] = test_db
@@ -210,6 +212,209 @@ class ProjectRecycleBinTests(RecycleBinTestCase):
 
 
 class ProjectEditingTests(RecycleBinTestCase):
+    async def test_story_memory_crud_is_project_scoped_and_used_for_generation(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            chapter = (await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).one()
+            chapter.chaptername = "北境来信"
+            chapter_id = chapter.id
+            await session.commit()
+
+        created = await self.client.post(
+            f"/api/project/{project_id}/memories",
+            json={
+                "category": "character", "title": "沈砚", "content": "沈砚答应护送信使前往北境。",
+                "keywords": ["沈砚", "信使", "北境"], "source_chapter_id": chapter_id,
+            },
+        )
+        self.assertEqual(created.status_code, 200)
+        memory_id = created.json()["data"]["id"]
+
+        listed = await self.client.get(f"/api/project/{project_id}/memories")
+        self.assertEqual(len(listed.json()["data"]), 1)
+        self.assertEqual(listed.json()["data"][0]["title"], "沈砚")
+
+        self.client.headers["Authorization"] = "Bearer other-token"
+        forbidden = await self.client.get(f"/api/project/{project_id}/memories")
+        self.assertEqual(forbidden.status_code, 404)
+        self.client.headers["Authorization"] = "Bearer owner-token"
+
+        with patch("services.generation_runtime.LLMClient") as llm_class:
+            llm_class.return_value.__aenter__.return_value.achat = AsyncMock(return_value="风雪中的信使停下脚步。")
+            generated = await self.client.post(
+                f"/api/agent/projects/{project_id}/chapters/{chapter_id}/content",
+                json={"expected_words": 1800, "user_idea": "沈砚带信使沿北境小路前行"},
+            )
+        self.assertEqual(generated.status_code, 200)
+        prompt = llm_class.return_value.__aenter__.return_value.achat.await_args.args[0][1]["content"]
+        self.assertIn("沈砚答应护送信使前往北境", prompt)
+
+        updated = await self.client.put(
+            f"/api/project/{project_id}/memories/{memory_id}",
+            json={
+                "category": "character", "title": "沈砚", "content": "沈砚已将信使送抵北境。",
+                "keywords": ["沈砚", "北境"], "source_chapter_id": chapter_id, "is_active": False,
+            },
+        )
+        self.assertFalse(updated.json()["data"]["is_active"])
+        deleted = await self.client.delete(f"/api/project/{project_id}/memories/{memory_id}")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual((await self.client.get(f"/api/project/{project_id}/memories")).json()["data"], [])
+
+    async def test_story_memory_batch_review_and_conflict_detection(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            chapter = (await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).one()
+            chapter_id = chapter.id
+
+        payloads = [
+            {"category": "character", "title": "沈砚", "content": "沈砚在北境寻找信使。", "keywords": ["沈砚", "北境"]},
+            {"category": "character", "title": "沈砚", "content": "沈砚在北境保护信使。", "keywords": ["沈砚", "北境"]},
+        ]
+        ids = []
+        for payload in payloads:
+            payload["source_chapter_id"] = chapter_id
+            response = await self.client.post(f"/api/project/{project_id}/memories", json=payload)
+            self.assertEqual(response.status_code, 200)
+            ids.append(response.json()["data"]["id"])
+
+        conflicts = await self.client.get(f"/api/project/{project_id}/memories/conflicts")
+        self.assertEqual(conflicts.status_code, 200)
+        self.assertEqual(conflicts.json()["data"][0]["reason"], "same_title")
+
+        for memory_id in ids:
+            async with self.sessions() as session:
+                memory = await session.get(StoryMemory, memory_id)
+                memory.origin = "chapter_extract"
+                memory.review_status = "pending"
+                memory.is_active = False
+                await session.commit()
+        batch = await self.client.post(
+            f"/api/project/{project_id}/memories/batch-review",
+            json={"memory_ids": ids, "decision": "approved"},
+        )
+        self.assertEqual(batch.status_code, 200)
+        self.assertTrue(all(item["is_active"] for item in batch.json()["data"]))
+
+    async def test_story_memory_merge_keeps_target_and_records_audit_event(self):
+        project_id = await self.seed_project(chapter_count=1)
+        payloads = [
+            {"category": "world", "title": "北境", "content": "北境常年风雪。", "keywords": ["北境", "风雪"]},
+            {"category": "world", "title": "北境规则补充", "content": "北境的关隘在冬季关闭。", "keywords": ["北境", "关隘"]},
+        ]
+        ids = []
+        for payload in payloads:
+            response = await self.client.post(f"/api/project/{project_id}/memories", json=payload)
+            ids.append(response.json()["data"]["id"])
+        merged = await self.client.post(
+            f"/api/project/{project_id}/memories/merge",
+            json={"target_id": ids[0], "source_ids": [ids[1]]},
+        )
+        self.assertEqual(merged.status_code, 200)
+        self.assertIn("关隘", merged.json()["data"]["content"])
+        async with self.sessions() as session:
+            source = await session.get(StoryMemory, ids[1])
+            event = (await session.scalars(select(StoryMemoryEvent).where(StoryMemoryEvent.project_id == project_id))).one()
+            self.assertEqual(source.merged_into_id, ids[0])
+            self.assertEqual(event.event_type, "merge")
+        events = await self.client.get(f"/api/project/{project_id}/memories/events")
+        self.assertEqual(events.status_code, 200)
+        self.assertEqual(events.json()["data"][0]["event_type"], "merge")
+
+    async def test_story_memory_undo_restores_update_and_review(self):
+        project_id = await self.seed_project(chapter_count=1)
+        created = await self.client.post(
+            f"/api/project/{project_id}/memories",
+            json={"category": "character", "title": "沈砚", "content": "初始状态", "keywords": ["初始"]},
+        )
+        memory_id = created.json()["data"]["id"]
+        updated = await self.client.put(
+            f"/api/project/{project_id}/memories/{memory_id}",
+            json={"category": "character", "title": "沈砚新名", "content": "修改状态", "keywords": ["修改"]},
+        )
+        self.assertEqual(updated.status_code, 200)
+        undone = await self.client.post(f"/api/project/{project_id}/memories/{memory_id}/undo")
+        self.assertEqual(undone.status_code, 200)
+        self.assertEqual(undone.json()["data"]["title"], "沈砚")
+        self.assertEqual(undone.json()["data"]["content"], "初始状态")
+
+        async with self.sessions() as session:
+            memory = await session.get(StoryMemory, memory_id)
+            memory.origin = "chapter_extract"
+            memory.review_status = "pending"
+            memory.is_active = False
+            await session.commit()
+        reviewed = await self.client.post(
+            f"/api/project/{project_id}/memories/{memory_id}/review", json={"decision": "approved"},
+        )
+        self.assertEqual(reviewed.status_code, 200)
+        reverted = await self.client.post(f"/api/project/{project_id}/memories/{memory_id}/undo")
+        self.assertEqual(reverted.status_code, 200)
+        self.assertEqual(reverted.json()["data"]["review_status"], "pending")
+        self.assertFalse(reverted.json()["data"]["is_active"])
+        duplicate = await self.client.post(f"/api/project/{project_id}/memories/{memory_id}/undo")
+        self.assertEqual(duplicate.status_code, 409)
+
+    async def test_story_memory_undo_merge_restores_sources(self):
+        project_id = await self.seed_project(chapter_count=1)
+        ids = []
+        for title, content in (("北境", "常年风雪"), ("北境补充", "冬季封关")):
+            response = await self.client.post(
+                f"/api/project/{project_id}/memories",
+                json={"category": "world", "title": title, "content": content, "keywords": ["北境"]},
+            )
+            ids.append(response.json()["data"]["id"])
+        merged = await self.client.post(
+            f"/api/project/{project_id}/memories/merge",
+            json={"target_id": ids[0], "source_ids": [ids[1]]},
+        )
+        self.assertEqual(merged.status_code, 200)
+        undone = await self.client.post(f"/api/project/{project_id}/memories/{ids[0]}/undo")
+        self.assertEqual(undone.status_code, 200)
+        async with self.sessions() as session:
+            target = await session.get(StoryMemory, ids[0])
+            source = await session.get(StoryMemory, ids[1])
+            self.assertEqual(target.content, "常年风雪")
+            self.assertIsNone(source.merged_into_id)
+            self.assertTrue(source.is_active)
+            self.assertEqual(source.review_status, "approved")
+
+    async def test_project_exports_markdown_and_txt_with_only_active_chapters(self):
+        project_id = await self.seed_project(chapter_count=2)
+        async with self.sessions() as session:
+            project = await session.get(Project, project_id)
+            project.projectname = "风起山海"
+            project.project_type = "奇幻"
+            project.introduction = "少年踏上寻龙之旅。"
+            project.outline = "第一卷：山海初遇"
+            chapters = list((await session.scalars(
+                select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_number)
+            )).all())
+            chapters[0].chaptername = "初入山海"
+            chapters[0].content = "群山之外，少年抬头望见巨龙。"
+            chapters[1].chaptername = "已删除章节"
+            chapters[1].content = "这部分已经移入回收站。"
+            chapters[1].is_deleted = True
+            await session.commit()
+
+        markdown = await self.client.get(f"/api/project/{project_id}/export/markdown")
+        self.assertEqual(markdown.status_code, 200)
+        self.assertIn("filename*=UTF-8''", markdown.headers["content-disposition"])
+        self.assertIn("# 风起山海", markdown.text)
+        self.assertIn("## 故事大纲", markdown.text)
+        self.assertIn("### 第 1 章 初入山海", markdown.text)
+        self.assertNotIn("这部分已经移入回收站", markdown.text)
+
+        text_export = await self.client.get(f"/api/project/{project_id}/export/txt")
+        self.assertEqual(text_export.status_code, 200)
+        self.assertIn("%E9%A3%8E%E8%B5%B7%E5%B1%B1%E6%B5%B7.txt", text_export.headers["content-disposition"])
+        self.assertIn("第 1 章 初入山海", text_export.text)
+        self.assertNotIn("已删除章节", text_export.text)
+
+        self.client.headers["Authorization"] = "Bearer other-token"
+        forbidden = await self.client.get(f"/api/project/{project_id}/export/markdown")
+        self.assertEqual(forbidden.status_code, 404)
+
     async def test_project_and_chapter_saves_are_committed(self):
         project_id = await self.seed_project(chapter_count=1)
 
@@ -316,7 +521,7 @@ class ProjectEditingTests(RecycleBinTestCase):
             project.projectname = "星河归途"
             await session.commit()
 
-        with patch("routers.agent.LLMClient") as llm_class:
+        with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
             client.achat = AsyncMock(return_value="第一卷：星海启程")
             response = await self.client.post(
@@ -357,7 +562,7 @@ class ProjectEditingTests(RecycleBinTestCase):
             chapter_id = chapter.id
             await session.commit()
 
-        with patch("routers.agent.LLMClient") as llm_class:
+        with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
             client.achat = AsyncMock(return_value="飞船缓缓驶离港口。")
             response = await self.client.post(
@@ -390,7 +595,7 @@ class ProjectEditingTests(RecycleBinTestCase):
             chapter_id = chapters[1].id
             await session.commit()
 
-        with patch("routers.agent.LLMClient") as llm_class:
+        with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
             client.achat = AsyncMock(return_value="北境关隘外，风雪骤起。")
             response = await self.client.post(
@@ -419,7 +624,7 @@ class ProjectEditingTests(RecycleBinTestCase):
             "unresolved_threads": "信使携带的密函来源不明",
             "timeline": "雨夜，王城封锁前",
         }
-        with patch("routers.agent.LLMClient") as llm_class:
+        with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
             client.achat = AsyncMock(return_value=json.dumps(generated, ensure_ascii=False))
             response = await self.client.post(
@@ -435,6 +640,25 @@ class ProjectEditingTests(RecycleBinTestCase):
             self.assertEqual(saved.summary, generated["summary"])
             self.assertEqual(saved.memory["unresolved_threads"], generated["unresolved_threads"])
 
+        pending = (await self.client.get(f"/api/project/{project_id}/memories")).json()["data"]
+        suggestions = [item for item in pending if item["origin"] == "chapter_extract"]
+        self.assertEqual(len(suggestions), 4)
+        self.assertTrue(all(item["review_status"] == "pending" and not item["is_active"] for item in suggestions))
+
+        character_suggestion = next(item for item in suggestions if item["category"] == "character")
+        review_response = await self.client.post(
+            f"/api/project/{project_id}/memories/{character_suggestion['id']}/review",
+            json={"decision": "approved"},
+        )
+        self.assertEqual(review_response.status_code, 200)
+        self.assertEqual(review_response.json()["data"]["review_status"], "approved")
+        self.assertTrue(review_response.json()["data"]["is_active"])
+        reject_response = await self.client.post(
+            f"/api/project/{project_id}/memories/{suggestions[1]['id']}/review",
+            json={"decision": "rejected"},
+        )
+        self.assertEqual(reject_response.json()["data"]["review_status"], "rejected")
+
     async def test_generate_chapter_memory_rejects_empty_content_and_invalid_json(self):
         project_id = await self.seed_project(chapter_count=1)
         async with self.sessions() as session:
@@ -447,7 +671,7 @@ class ProjectEditingTests(RecycleBinTestCase):
         async with self.sessions() as session:
             (await session.get(Chapter, chapter_id)).content = "已有正文"
             await session.commit()
-        with patch("routers.agent.LLMClient") as llm_class:
+        with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
             client.achat = AsyncMock(return_value="不是 JSON")
             invalid = await self.client.post(f"/api/agent/projects/{project_id}/chapters/{chapter_id}/memory", json={})

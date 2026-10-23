@@ -12,7 +12,9 @@ import {
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api/client'
-import type { OutlineVersion } from '../types'
+import type { KnowledgeCitation, OutlineVersion } from '../types'
+import { KnowledgeBaseSelector } from '../components/KnowledgeBaseSelector'
+import { KnowledgeCitationList } from '../components/KnowledgeCitationList'
 
 export function OutlineDetailPage() {
   const { projectId, feature } = useParams()
@@ -34,6 +36,8 @@ export function OutlineDetailPage() {
   const [versionsLoading, setVersionsLoading] = useState(false)
   const [restoringVersion, setRestoringVersion] = useState<number | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<number[]>([])
+  const [knowledgeCitations, setKnowledgeCitations] = useState<KnowledgeCitation[]>([])
 
   const loadOutline = useCallback(async () => {
     const id = Number(projectId)
@@ -141,8 +145,11 @@ export function OutlineDetailPage() {
     setGenerating(true)
     setGenerationError('')
     try {
-      const result = await api.generateProjectOutline(id, words, generationIdea)
+      const result = knowledgeBaseIds.length
+        ? await api.generateProjectOutline(id, words, generationIdea, knowledgeBaseIds)
+        : await api.generateProjectOutline(id, words, generationIdea)
       setDraft(result.outline)
+      setKnowledgeCitations(result.citations || [])
       setGenerationDialogOpen(false)
       setNotice('大纲已生成，请检查后点击“保存修改”入库')
     } catch (reason) {
@@ -340,6 +347,7 @@ export function OutlineDetailPage() {
               <div className="outline-content-view">{outline || '暂未填写大纲，点击左侧“编辑大纲”开始编写。'}</div>
             )}
           </section>
+          <KnowledgeCitationList citations={knowledgeCitations} />
         </div>
       </div>
       {generationDialogOpen && (
@@ -381,6 +389,7 @@ export function OutlineDetailPage() {
                 />
                 <small className="field-help">仅用于安排分卷和情节体量，不会生成同等字数的大纲。</small>
               </label>
+              <KnowledgeBaseSelector selectedIds={knowledgeBaseIds} onChange={setKnowledgeBaseIds} />
               <label className="detail-edit-field">
                 <span>你的想法（选填）</span>
                 <textarea
