@@ -26,7 +26,8 @@ def upgrade() -> None:
     )
     op.create_index("ix_inspirations_user_id", "inspirations", ["user_id"])
     op.create_index("ix_inspirations_is_deleted", "inspirations", ["is_deleted"])
-    op.alter_column("inspirations", "is_deleted", server_default=None)
+    with op.batch_alter_table("inspirations") as batch_op:
+        batch_op.alter_column("is_deleted", server_default=None)
 
 
 def downgrade() -> None:

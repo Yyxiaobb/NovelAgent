@@ -77,6 +77,7 @@ def upgrade() -> None:
             "knowledge_bases",
             "knowledge_documents",
             "knowledge_chunks",
+            "inspirations",
         }
         baseline_tables = [table for table in Base.metadata.sorted_tables if table.name not in later_tables]
         Base.metadata.create_all(bind=bind, tables=baseline_tables)

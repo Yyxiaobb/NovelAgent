@@ -16,7 +16,8 @@ def upgrade() -> None:
         sa.Column("is_deleted", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
     op.create_index("ix_knowledge_bases_is_deleted", "knowledge_bases", ["is_deleted"])
-    op.alter_column("knowledge_bases", "is_deleted", server_default=None)
+    with op.batch_alter_table("knowledge_bases") as batch_op:
+        batch_op.alter_column("is_deleted", server_default=None)
 
 
 def downgrade() -> None:

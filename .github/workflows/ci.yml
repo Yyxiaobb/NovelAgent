@@ -50,7 +50,7 @@ jobs:
         run: python -m alembic upgrade head
 
       - name: Verify migration head
-        run: python -m alembic heads | grep -q "^0002_consistent_project_stats "
+        run: python -m alembic heads | grep -q "^0008_inspirations "
 
   frontend:
     name: Frontend tests and build
