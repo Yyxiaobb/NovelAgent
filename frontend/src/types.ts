@@ -159,6 +159,13 @@ export interface GenerationJob {
   expected_words?: number | null
   plan?: ChapterPlan | null
   citations?: KnowledgeCitation[]
+  generation_info?: {
+    model?: string
+    prompt_template_id?: string
+    prompt_template_version?: string
+    segments?: number
+    quality_check?: string
+  }
   error: string | null
   created_at: string
   updated_at: string

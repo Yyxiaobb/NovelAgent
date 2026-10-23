@@ -59,11 +59,15 @@ from services.agent_generation import (
 )
 
 from services.chapter_generation import (
-    build_context,
+    ContentQualityError,
+    prepare_content_context,
+    generate_content,
+    stream_content,
     sse,
+    validate_content_quality,
 )
 
-from agent.prompts import get_prompt_template, render_prompt
+from agent.prompts import render_prompt
 
 from agent.runtime import run_agent
 
@@ -82,7 +86,10 @@ async def generate_chapter_content(
     user: User = Depends(get_current_user),
 ):
     context_started = perf_counter()
-    project, chapter, plan, prompt, citations = await build_context(db, project_id, chapter_id, user.id, payload)
+    context = await prepare_content_context(db, project_id, chapter_id, user.id, payload)
+    project, chapter, plan, prompt, citations = (
+        context.project, context.chapter, context.plan, context.prompt, context.citations
+    )
     log_generation_metric(
         "context_built",
         "chapter_content",
@@ -91,27 +98,17 @@ async def generate_chapter_content(
         expected_words=plan.expected_words,
     )
     try:
-        async with generation_client() as client:
-            model_started = perf_counter()
-            content = (
-                await client.achat(
-                    [
-                        {"role": "system", "content": get_prompt_template("chapter_content").system},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.8,
-                    max_tokens=_content_max_tokens(plan.expected_words),
-                )
-            ).strip()
-            log_generation_metric(
-                "model_complete",
-                "chapter_content",
-                (perf_counter() - model_started) * 1000,
-                prompt_chars=len(prompt),
-                output_chars=len(content),
-                model=client.model,
-                expected_words=plan.expected_words,
-            )
+        model_started = perf_counter()
+        content, model = await generate_content(context, generation_client, _content_max_tokens)
+        log_generation_metric(
+            "model_complete",
+            "chapter_content",
+            (perf_counter() - model_started) * 1000,
+            prompt_chars=len(prompt),
+            output_chars=len(content),
+            model=model,
+            expected_words=plan.expected_words,
+        )
     except LLMConfigurationError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -122,6 +119,8 @@ async def generate_chapter_content(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="章节生成暂时不可用，请稍后重试",
         ) from error
+    except ContentQualityError as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
 
     if not content:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="模型未返回可用章节内容")
@@ -147,7 +146,10 @@ async def stream_chapter_content(
     user: User = Depends(get_current_user),
 ):
     context_started = perf_counter()
-    project, chapter, plan, prompt, citations = await build_context(db, project_id, chapter_id, user.id, payload)
+    context = await prepare_content_context(db, project_id, chapter_id, user.id, payload)
+    project, chapter, plan, prompt, citations = (
+        context.project, context.chapter, context.plan, context.prompt, context.citations
+    )
     log_generation_metric(
         "context_built",
         "chapter_content_stream",
@@ -158,22 +160,24 @@ async def stream_chapter_content(
 
     async def events():
         total = 0
+        generated_parts = []
         first_chunk_ms = None
         model_started = perf_counter()
+        client_model = None
+
+        def remember_client(client):
+            nonlocal client_model
+            client_model = client.model
+
         try:
-            async with generation_client() as client:
-                async for chunk in client.astream(
-                    [
-                        {"role": "system", "content": get_prompt_template("chapter_content").system},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.8,
-                    max_tokens=_content_max_tokens(plan.expected_words),
-                ):
-                    if first_chunk_ms is None:
-                        first_chunk_ms = (perf_counter() - model_started) * 1000
-                    total += len(chunk)
-                    yield sse("chunk", chunk)
+            async for chunk in stream_content(
+                context, generation_client, _content_max_tokens, on_client=remember_client
+            ):
+                if first_chunk_ms is None:
+                    first_chunk_ms = (perf_counter() - model_started) * 1000
+                total += len(chunk)
+                generated_parts.append(chunk)
+                yield sse("chunk", chunk)
             log_generation_metric(
                 "model_stream_complete",
                 "chapter_content",
@@ -181,22 +185,22 @@ async def stream_chapter_content(
                 first_chunk_ms=round(first_chunk_ms, 2) if first_chunk_ms is not None else None,
                 prompt_chars=len(prompt),
                 output_chars=total,
-                model=client.model,
+                model=client_model,
                 expected_words=plan.expected_words,
             )
-            if not total:
-                yield sse("error", "模型未返回可用章节内容")
-            else:
-                yield sse(
-                    "done",
-                    {
-                        "project_id": project.id,
-                        "chapter_id": chapter.id,
-                        "expected_words": plan.expected_words,
-                        "plan": plan.model_dump(),
-                        "citations": citations,
-                    },
-                )
+            validate_content_quality("".join(generated_parts), plan.expected_words)
+            yield sse(
+                "done",
+                {
+                    "project_id": project.id,
+                    "chapter_id": chapter.id,
+                    "expected_words": plan.expected_words,
+                    "plan": plan.model_dump(),
+                    "citations": citations,
+                },
+            )
+        except ContentQualityError as error:
+            yield sse("error", str(error))
         except LLMConfigurationError:
             yield sse("error", "智能生成尚未配置模型，请先配置 LLM_MODEL、LLM_API_KEY 和 LLM_BASE_URL")
         except LLMError:
@@ -215,7 +219,7 @@ async def start_chapter_content_job(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    await build_context(db, project_id, chapter_id, user.id, payload)
+    await prepare_content_context(db, project_id, chapter_id, user.id, payload)
     job_id = uuid.uuid4().hex
     await generation_crud.create_chapter_content_job(
         db,
@@ -258,6 +262,11 @@ async def get_chapter_content_job(job_id: str, user: User = Depends(get_current_
             "expected_words": result.get("expected_words"),
             "plan": result.get("plan"),
             "citations": result.get("citations", []),
+            "generation_info": {
+                key: result.get(key)
+                for key in ("model", "prompt_template_id", "prompt_template_version", "segments", "quality_check")
+                if result.get(key) is not None
+            },
             "error": job.error_message,
         },
     )
@@ -292,6 +301,13 @@ async def list_chapter_content_jobs(
                 "expected_words": (job.result or {}).get("expected_words"),
                 "plan": (job.result or {}).get("plan"),
                 "citations": (job.result or {}).get("citations", []),
+                "generation_info": {
+                    key: (job.result or {}).get(key)
+                    for key in (
+                        "model", "prompt_template_id", "prompt_template_version", "segments", "quality_check",
+                    )
+                    if (job.result or {}).get(key) is not None
+                },
                 "error": job.error_message,
                 "created_at": job.created_at.isoformat(),
                 "updated_at": job.updated_at.isoformat(),
@@ -330,7 +346,7 @@ async def retry_chapter_content_job(job_id: str, user: User = Depends(get_curren
         if source.status not in {"failed", "cancelled"}:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有失败或已取消的任务可以重试")
         payload = ChapterGenerationRequest.model_validate(source.input_payload or {})
-        await build_context(db, source.project_id, source.chapter_id, user.id, payload)
+        await prepare_content_context(db, source.project_id, source.chapter_id, user.id, payload)
         new_job_id = uuid.uuid4().hex
         await generation_crud.create_chapter_content_job(
             db,

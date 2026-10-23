@@ -476,6 +476,13 @@ export function ChapterDetailPage() {
                             {new Date(job.created_at).toLocaleString()} ·{' '}
                             {job.expected_words ? `目标 ${job.expected_words} 字` : '章节正文'}
                           </small>
+                          {job.generation_info && (
+                            <small>
+                              Prompt {job.generation_info.prompt_template_id} v
+                              {job.generation_info.prompt_template_version} ·{' '}
+                              {job.generation_info.segments ?? 1} 段 · 质量检查通过
+                            </small>
+                          )}
                           {job.error && <p className="error-copy">{job.error}</p>}
                         </div>
                         <div className="generation-history-actions">

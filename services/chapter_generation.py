@@ -1,12 +1,15 @@
 import asyncio
 import json
-from typing import Any, Callable
+import re
+import math
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Callable
 
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from agent import LLMConfigurationError, LLMError
+from agent import LLMConfigurationError, LLMError, LLMRequestError
 from agent.prompts import get_prompt_template, render_prompt
 from crud import generation as generation_crud
 from crud import projects
@@ -23,7 +26,136 @@ from services.knowledge_rag import (
 )
 
 
-async def build_context(db: AsyncSession, project_id: int, chapter_id: int, user_id: int, payload: ChapterGenerationRequest):
+@dataclass(frozen=True)
+class ChapterContentContext:
+    """All data required to generate one chapter.
+
+    Keeping this object independent from the transport layer means synchronous,
+    streaming, and queued generation use exactly the same prompt and citations.
+    """
+
+    project: Any
+    chapter: Any
+    plan: ChapterPlan
+    prompt: str
+    citations: list[Any]
+
+    @property
+    def messages(self) -> list[dict[str, str]]:
+        return [
+            {"role": "system", "content": get_prompt_template("chapter_content").system},
+            {"role": "user", "content": self.prompt},
+        ]
+
+
+class ContentQualityError(ValueError):
+    """The model returned output that is unsafe or unusable as chapter prose."""
+
+
+_META_OPENERS = re.compile(
+    r"^(?:以下是(?:正文|章节|内容)|当然[，,]\s*(?:以下|作为人工智能)|写作说明[:：]?|正文如下[:：]?|作为(?:一个)?(?:AI|人工智能))",
+    re.IGNORECASE,
+)
+_PROMPT_LEAKS = ("system prompt", "系统提示词", "你是一个专业的小说创作助手")
+BACKGROUND_GENERATION_ATTEMPTS = 2
+MAX_WORDS_PER_SEGMENT = 8000
+MAX_PROMPT_CHARACTERS = 48_000
+
+
+def _limit_context(value: str, max_chars: int) -> str:
+    value = value or ""
+    if len(value) <= max_chars:
+        return value
+    omitted = len(value) - max_chars
+    return f"{value[:max_chars]}\n（上下文已截断，省略 {omitted} 字）"
+
+
+def _fit_prompt_budget(prompt: str) -> str:
+    """Keep the prompt within a conservative approximate token budget."""
+    if len(prompt) <= MAX_PROMPT_CHARACTERS:
+        return prompt
+    marker = "\n\n（上下文预算限制：中间部分已省略）\n\n"
+    remaining = MAX_PROMPT_CHARACTERS - len(marker)
+    head_size = remaining * 3 // 4
+    tail_size = remaining - head_size
+    return f"{prompt[:head_size]}{marker}{prompt[-tail_size:]}"
+
+
+def is_retryable_generation_error(error: LLMRequestError) -> bool:
+    """Only retry transient provider/network failures for durable background jobs."""
+    return (
+        error.status_code is None
+        or error.status_code in {408, 409, 425, 429}
+        or 500 <= error.status_code < 600
+    )
+
+
+def validate_content_quality(content: str, expected_words: int) -> None:
+    """Reject common generation failures consistently across all transports."""
+    normalized = content.strip()
+    if not normalized:
+        raise ContentQualityError("模型未返回可用章节内容")
+    minimum_length = min(200, max(80, round(expected_words * 0.1)))
+    if len(normalized) < minimum_length:
+        raise ContentQualityError(f"正文长度明显不足（至少需要约 {minimum_length} 字）")
+    if "```" in normalized:
+        raise ContentQualityError("正文包含 Markdown 代码围栏")
+    if _META_OPENERS.search(normalized):
+        raise ContentQualityError("模型返回了写作说明，请重新生成正文")
+    lowered = normalized.casefold()
+    if any(marker.casefold() in lowered for marker in _PROMPT_LEAKS):
+        raise ContentQualityError("正文疑似包含系统提示内容")
+
+
+def build_content_segments(context: ChapterContentContext) -> list[tuple[int, str]]:
+    """Split unusually long chapters into bounded narrative sections.
+
+    Regular chapters keep the original one-request behavior. Long chapters use
+    the ordered key events as scene anchors and receive the preceding scene tail
+    as continuity context.
+    """
+    segment_count = math.ceil(context.plan.expected_words / MAX_WORDS_PER_SEGMENT)
+    if segment_count <= 1:
+        return [(context.plan.expected_words, "")]
+    events = [
+        part.strip(" \t-•、")
+        for part in re.split(r"[\n。；;，、]+", context.plan.key_events)
+        if part.strip(" \t-•、")
+    ]
+    per_segment = math.ceil(context.plan.expected_words / segment_count)
+    event_groups = [events[index::segment_count] for index in range(segment_count)]
+    return [
+        (
+            min(per_segment, context.plan.expected_words - index * per_segment),
+            "；".join(group) or f"围绕本章目标推进第 {index + 1} 段情节",
+        )
+        for index, group in enumerate(event_groups)
+    ]
+
+
+def _segment_messages(context: ChapterContentContext, index: int, count: int, events: str, previous: str):
+    if count <= 1:
+        return context.messages
+    instructions = (
+        f"\n\n分段创作要求：这是本章第 {index + 1}/{count} 段，目标约 "
+        f"{math.ceil(context.plan.expected_words / count)} 字。只写本段正文，不要重复前文。"
+        f"\n本段应推进的关键事件：{events or context.plan.key_events}"
+    )
+    if previous:
+        instructions += f"\n上一段结尾（用于衔接，不要复述）：\n{previous[-1200:]}"
+    return [
+        context.messages[0],
+        {"role": "user", "content": context.prompt + instructions},
+    ]
+
+
+async def prepare_content_context(
+    db: AsyncSession,
+    project_id: int,
+    chapter_id: int,
+    user_id: int,
+    payload: ChapterGenerationRequest,
+) -> ChapterContentContext:
     project = await projects.get_project(db, project_id, user_id)
     chapter = await projects.get_chapter(db, project_id, chapter_id, user_id)
     if project is None or chapter is None:
@@ -54,11 +186,11 @@ async def build_context(db: AsyncSession, project_id: int, chapter_id: int, user
         "chapter_content",
         project_name=project.projectname or "未命名作品",
         project_type=project.project_type or "未指定",
-        project_introduction=project.introduction or "未提供",
-        project_outline=project.outline or "暂未提供，请依据简介自然展开",
-        prior_context=prior_context,
-        story_memory=story_memory,
-        project_memory_context=project_memory_context,
+        project_introduction=_limit_context(project.introduction or "未提供", 2000),
+        project_outline=_limit_context(project.outline or "暂未提供，请依据简介自然展开", 12000),
+        prior_context=_limit_context(prior_context, 6000),
+        story_memory=_limit_context(story_memory, 6000),
+        project_memory_context=_limit_context(project_memory_context, 6000),
         plan=plan.model_dump(),
         user_idea=payload.user_idea.strip() if payload.user_idea and payload.user_idea.strip() else "未提供",
         chapter_number=chapter.chapter_number,
@@ -86,7 +218,93 @@ async def build_context(db: AsyncSession, project_id: int, chapter_id: int, user
         except EmbeddingRequestError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
         prompt += format_retrieved_context(citations)
-    return project, chapter, plan, prompt, citations
+    prompt = _fit_prompt_budget(prompt)
+    return ChapterContentContext(
+        project=project,
+        chapter=chapter,
+        plan=plan,
+        prompt=prompt,
+        citations=citations,
+    )
+
+
+async def build_context(db: AsyncSession, project_id: int, chapter_id: int, user_id: int, payload: ChapterGenerationRequest):
+    """Backward-compatible tuple API for callers that still need unpacking."""
+    context = await prepare_content_context(db, project_id, chapter_id, user_id, payload)
+    return context.project, context.chapter, context.plan, context.prompt, context.citations
+
+
+async def generate_content(
+    context: ChapterContentContext,
+    client_factory: Callable,
+    content_token_fn: Callable[[int], int],
+) -> tuple[str, str]:
+    """Generate a complete chapter using the shared content contract.
+
+    Returns ``(content, model_name)`` so API callers can keep their telemetry
+    without duplicating client lifecycle and request construction.
+    """
+    async with client_factory() as client:
+        segments = build_content_segments(context)
+        outputs: list[str] = []
+        for index, (segment_words, events) in enumerate(segments):
+            messages = _segment_messages(context, index, len(segments), events, "\n".join(outputs))
+            content = (await client.achat(
+                messages, temperature=0.8, max_tokens=content_token_fn(segment_words),
+            )).strip()
+            try:
+                validate_content_quality(content, segment_words)
+            except ContentQualityError as first_error:
+                repair_messages = [
+                    *messages,
+                    {"role": "assistant", "content": content},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"刚才的输出未通过正文质量检查：{first_error}。"
+                            f"请直接重写本段完整正文，目标约 {segment_words} 字，"
+                            "不要添加说明、代码围栏或提示词内容。"
+                        ),
+                    },
+                ]
+                content = (await client.achat(
+                    repair_messages,
+                    temperature=0.55,
+                    max_tokens=content_token_fn(segment_words),
+                )).strip()
+                validate_content_quality(content, segment_words)
+            outputs.append(content)
+        complete_content = "\n\n".join(outputs)
+        validate_content_quality(complete_content, context.plan.expected_words)
+        return complete_content, client.model
+
+
+async def stream_content(
+    context: ChapterContentContext,
+    client_factory: Callable,
+    content_token_fn: Callable[[int], int],
+    *,
+    on_client: Callable[[Any], None] | None = None,
+) -> AsyncIterator[str]:
+    """Yield chapter text chunks using the same request as sync generation."""
+    async with client_factory() as client:
+        if on_client is not None:
+            on_client(client)
+        segments = build_content_segments(context)
+        outputs: list[str] = []
+        for index, (segment_words, events) in enumerate(segments):
+            if index:
+                yield "\n\n"
+            messages = _segment_messages(context, index, len(segments), events, "\n".join(outputs))
+            current_parts: list[str] = []
+            async for chunk in client.astream(
+                messages,
+                temperature=0.8,
+                max_tokens=content_token_fn(segment_words),
+            ):
+                current_parts.append(chunk)
+                yield chunk
+            outputs.append("".join(current_parts))
 
 
 def sse(event: str, data: Any) -> str:
@@ -107,31 +325,65 @@ async def run_content_job(
             if not await generation_crud.start_job_if_active(db, job_id):
                 return
             payload = ChapterGenerationRequest.model_validate(job.input_payload or {})
-            project, chapter, plan, prompt, citations = await build_context(
+            context = await prepare_content_context(
                 db, job.project_id, job.chapter_id, job.user_id, payload,
             )
             parts: list[str] = []
             last_persisted = asyncio.get_running_loop().time()
-            async with client_factory() as client:
-                async for chunk in client.astream([
-                    {"role": "system", "content": get_prompt_template("chapter_content").system},
-                    {"role": "user", "content": prompt},
-                ], temperature=0.8, max_tokens=content_token_fn(plan.expected_words)):
-                    parts.append(chunk)
-                    current_status = await db.scalar(
-                        select(GenerationJob.status).where(GenerationJob.id == job_id)
-                    )
-                    if current_status == "cancelled":
-                        return
-                    job.output_content = "".join(parts)
-                    job.progress = min(95, 5 + len(job.output_content) * 90 // max(1, plan.expected_words))
-                    now = asyncio.get_running_loop().time()
-                    if now - last_persisted >= 1:
-                        await db.commit()
-                        last_persisted = now
+            model_name = None
+
+            def remember_client(client):
+                nonlocal model_name
+                model_name = client.model
+
+            for attempt in range(BACKGROUND_GENERATION_ATTEMPTS):
+                current_status = await db.scalar(
+                    select(GenerationJob.status).where(GenerationJob.id == job_id)
+                )
+                if current_status == "cancelled":
+                    return
+                parts.clear()
+                try:
+                    async for chunk in stream_content(
+                        context, client_factory, content_token_fn, on_client=remember_client,
+                    ):
+                        parts.append(chunk)
+                        current_status = await db.scalar(
+                            select(GenerationJob.status).where(GenerationJob.id == job_id)
+                        )
+                        if current_status == "cancelled":
+                            return
+                        job.output_content = "".join(parts)
+                        job.progress = min(95, 5 + len(job.output_content) * 90 // max(1, context.plan.expected_words))
+                        now = asyncio.get_running_loop().time()
+                        if now - last_persisted >= 1:
+                            await db.commit()
+                            last_persisted = now
+                except LLMRequestError as error:
+                    if attempt + 1 >= BACKGROUND_GENERATION_ATTEMPTS or not is_retryable_generation_error(error):
+                        raise
+                    # A streamed response cannot safely resume mid-sentence.
+                    # Discard the partial attempt before retrying the whole draft.
+                    job.output_content = None
+                    job.progress = 5
+                    await db.commit()
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                break
+            content = "".join(parts).strip()
+            validate_content_quality(content, context.plan.expected_words)
             await generation_crud.complete_job_if_active(
-                db, job_id, output_content="".join(parts),
-                result={"expected_words": plan.expected_words, "plan": plan.model_dump(), "citations": citations},
+                db, job_id, output_content=content,
+                result={
+                    "expected_words": context.plan.expected_words,
+                    "plan": context.plan.model_dump(),
+                    "citations": context.citations,
+                    "model": model_name,
+                    "prompt_template_id": "chapter_content",
+                    "prompt_template_version": get_prompt_template("chapter_content").version,
+                    "segments": len(build_content_segments(context)),
+                    "quality_check": "passed",
+                },
             )
     except asyncio.CancelledError:
         # The cancel endpoint owns the persisted terminal state. Re-raise so
@@ -145,6 +397,10 @@ async def run_content_job(
         async with session_factory() as db:
             if job := await db.get(GenerationJob, job_id):
                 await generation_crud.update_job(db, job, status="failed", error_message=getattr(error, "detail", "章节生成暂时不可用，请稍后重试"))
+    except ContentQualityError as error:
+        async with session_factory() as db:
+            if job := await db.get(GenerationJob, job_id):
+                await generation_crud.update_job(db, job, status="failed", error_message=str(error))
     except Exception:
         async with session_factory() as db:
             if job := await db.get(GenerationJob, job_id):

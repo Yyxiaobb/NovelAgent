@@ -41,6 +41,46 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("有效 JSON", json.loads(invalid)["error"])
         self.assertEqual(json.loads(unknown)["error"], "未知工具")
 
+    async def test_chapter_context_tools_are_project_scoped_and_bounded(self):
+        from unittest.mock import patch
+
+        chapter = SimpleNamespace(
+            chapter_number=3, chaptername="关隘", plan={"objective": "通关"},
+            summary="主角找到密道", memory={"character_state": "受伤"},
+            content="正文" * 1000,
+        )
+        with patch("agent.runtime.projects.get_chapter", new=AsyncMock(return_value=chapter)) as get_chapter:
+            chapter_result = json.loads(await _execute(
+                "get_chapter", '{"chapter_id": 7}', object(), project_id=9, user_id=4,
+            ))
+        get_chapter.assert_awaited_once_with(unittest.mock.ANY, 9, 7, 4)
+        self.assertEqual(chapter_result["summary"], "主角找到密道")
+        self.assertEqual(len(chapter_result["content_excerpt"]), 1200)
+
+        prior = [SimpleNamespace(
+            chapter_number=2, chaptername="前夜", summary="暴风将至", memory={"timeline": "黄昏"},
+        )]
+        with (
+            patch("agent.runtime.projects.get_project", new=AsyncMock(return_value=object())) as get_project,
+            patch("agent.runtime.projects.get_prior_chapter_memories", new=AsyncMock(return_value=prior)) as get_prior,
+        ):
+            memories = json.loads(await _execute(
+                "get_recent_chapter_memories",
+                '{"before_chapter_number": 3, "limit": 4}', object(), project_id=9, user_id=4,
+            ))
+        get_project.assert_awaited_once_with(unittest.mock.ANY, 9, 4)
+        get_prior.assert_awaited_once_with(unittest.mock.ANY, 9, 3, limit=4)
+        self.assertEqual(memories[0]["summary"], "暴风将至")
+
+    async def test_chapter_context_tool_rejects_invalid_or_cross_project_ids(self):
+        from unittest.mock import patch
+
+        invalid = await _execute("get_chapter", '{"chapter_id": -1}', object(), project_id=9, user_id=4)
+        self.assertIn("参数无效", json.loads(invalid)["error"])
+        with patch("agent.runtime.projects.get_chapter", new=AsyncMock(return_value=None)):
+            inaccessible = await _execute("get_chapter", '{"chapter_id": 7}', object(), project_id=9, user_id=4)
+        self.assertIn("不可访问", json.loads(inaccessible)["error"])
+
     async def test_round_budget_stops_unbounded_tool_loop(self):
         call = SimpleNamespace(id="call-1", function=SimpleNamespace(name="unknown", arguments="{}"))
         client = SimpleNamespace(acompletion=AsyncMock(return_value=_response(tool_calls=[call])))

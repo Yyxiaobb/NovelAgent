@@ -27,6 +27,15 @@ class _SearchArgs(_Args):
     query: str = Field(min_length=1, max_length=500)
 
 
+class _ChapterArgs(_Args):
+    chapter_id: int = Field(gt=0)
+
+
+class _RecentMemoriesArgs(_Args):
+    before_chapter_number: int = Field(gt=1)
+    limit: int = Field(default=5, ge=1, le=10)
+
+
 TOOL_DEFINITIONS = [
     {"type": "function", "function": {
         "name": "get_project_context", "description": "读取当前作品名称、类型、简介和大纲。",
@@ -41,6 +50,19 @@ TOOL_DEFINITIONS = [
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "minLength": 1, "maxLength": 500},
         }, "required": ["query"], "additionalProperties": False},
+    }},
+    {"type": "function", "function": {
+        "name": "get_chapter", "description": "读取当前作品中指定章节的规划、摘要和人物状态。",
+        "parameters": {"type": "object", "properties": {
+            "chapter_id": {"type": "integer", "minimum": 1},
+        }, "required": ["chapter_id"], "additionalProperties": False},
+    }},
+    {"type": "function", "function": {
+        "name": "get_recent_chapter_memories", "description": "读取当前章节之前最近几章的摘要与连续性记忆。",
+        "parameters": {"type": "object", "properties": {
+            "before_chapter_number": {"type": "integer", "minimum": 2},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
+        }, "required": ["before_chapter_number"], "additionalProperties": False},
     }},
 ]
 
@@ -75,6 +97,41 @@ async def _execute(name: str, raw_arguments: str, db: AsyncSession, *, project_i
             return json.dumps({"error": "作品不可访问"}, ensure_ascii=False)
         entries = await story_memory_crud.list_active_project_memories(db, project_id)
         result = build_project_memory_context(entries, query, limit=8, max_chars=MAX_TOOL_RESULT_CHARS)
+    elif name == "get_chapter":
+        try:
+            chapter_id = _ChapterArgs.model_validate(args).chapter_id
+        except ValidationError:
+            return json.dumps({"error": "参数无效，chapter_id 必须为正整数"}, ensure_ascii=False)
+        chapter = await projects.get_chapter(db, project_id, chapter_id, user_id)
+        if chapter is None:
+            return json.dumps({"error": "章节不可访问"}, ensure_ascii=False)
+        result = {
+            "chapter_number": chapter.chapter_number,
+            "chaptername": chapter.chaptername,
+            "plan": chapter.plan,
+            "summary": chapter.summary,
+            "memory": chapter.memory,
+            "content_excerpt": (chapter.content or "")[:1200],
+        }
+    elif name == "get_recent_chapter_memories":
+        try:
+            options = _RecentMemoriesArgs.model_validate(args)
+        except ValidationError:
+            return json.dumps({"error": "参数无效，章节编号或数量超出范围"}, ensure_ascii=False)
+        if await projects.get_project(db, project_id, user_id) is None:
+            return json.dumps({"error": "作品不可访问"}, ensure_ascii=False)
+        chapters = await projects.get_prior_chapter_memories(
+            db, project_id, options.before_chapter_number, limit=options.limit,
+        )
+        result = [
+            {
+                "chapter_number": chapter.chapter_number,
+                "chaptername": chapter.chaptername,
+                "summary": chapter.summary,
+                "memory": chapter.memory,
+            }
+            for chapter in chapters
+        ]
     else:
         return json.dumps({"error": "未知工具"}, ensure_ascii=False)
     rendered = json.dumps(result, ensure_ascii=False, default=str)

@@ -240,7 +240,9 @@ class ProjectEditingTests(RecycleBinTestCase):
         self.client.headers["Authorization"] = "Bearer owner-token"
 
         with patch("services.generation_runtime.LLMClient") as llm_class:
-            llm_class.return_value.__aenter__.return_value.achat = AsyncMock(return_value="风雪中的信使停下脚步。")
+            llm_class.return_value.__aenter__.return_value.achat = AsyncMock(
+                return_value="风雪中的信使停下脚步，护送者开始检查周围的脚印与车辙。" * 10
+            )
             generated = await self.client.post(
                 f"/api/agent/projects/{project_id}/chapters/{chapter_id}/content",
                 json={"expected_words": 1800, "user_idea": "沈砚带信使沿北境小路前行"},
@@ -564,14 +566,15 @@ class ProjectEditingTests(RecycleBinTestCase):
 
         with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
-            client.achat = AsyncMock(return_value="飞船缓缓驶离港口。")
+            generated_content = "飞船缓缓驶离港口，船员们开始检查航线与能源储备。" * 10
+            client.achat = AsyncMock(return_value=generated_content)
             response = await self.client.post(
                 f"/api/agent/projects/{project_id}/chapters/{chapter_id}/content",
                 json={"expected_words": 2500, "user_idea": "结尾出现新的线索"},
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["data"]["content"], "飞船缓缓驶离港口。")
+        self.assertEqual(response.json()["data"]["content"], generated_content)
         prompt = client.achat.await_args.args[0][1]["content"]
         self.assertIn("作品类型：科幻", prompt)
         self.assertIn("第一卷：穿越深空", prompt)
@@ -597,7 +600,7 @@ class ProjectEditingTests(RecycleBinTestCase):
 
         with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
-            client.achat = AsyncMock(return_value="北境关隘外，风雪骤起。")
+            client.achat = AsyncMock(return_value="北境关隘外，风雪骤起，主角握紧地图，决定冒险穿过封锁线。" * 10)
             response = await self.client.post(
                 f"/api/agent/projects/{project_id}/chapters/{chapter_id}/content",
                 json={"expected_words": 1800},
