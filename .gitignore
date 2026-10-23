@@ -20,3 +20,5 @@ uploads/
 # Local generation timing output
 novel-agent-generation.jsonl
 generation_telemetry*.jsonl
+
+docs/
