@@ -4,6 +4,7 @@ from sqlalchemy.orm import selectinload
 
 from models.projects import Chapter, Project
 from models.knowledge_base import KnowledgeBase, KnowledgeChunk, KnowledgeDocument
+from models.outline_volume import OutlineVolume
 from crud.projects import recalculate_project_stats
 
 _NO_PROJECT_STATUS = "未设置"
@@ -77,6 +78,15 @@ async def permanently_delete_project(db: AsyncSession, project_id: int, user_id:
     await db.delete(project)
     await db.commit()
     return True
+
+
+async def permanently_delete_all_projects(db: AsyncSession, user_id: int) -> int:
+    result = await db.scalars(select(Project).where(Project.user_id == user_id, Project.status == "回收站"))
+    projects = list(result.all())
+    for project in projects:
+        await db.delete(project)
+    await db.commit()
+    return len(projects)
 
 
 async def get_recycled_chapters(db: AsyncSession, user_id: int):
@@ -154,6 +164,75 @@ async def permanently_delete_chapter(db: AsyncSession, chapter_id: int, user_id:
     return True
 
 
+async def permanently_delete_all_chapters(db: AsyncSession, user_id: int) -> int:
+    rows = (await db.execute(
+        select(Chapter, Project).join(Project).where(
+            Project.user_id == user_id,
+            Chapter.is_deleted.is_(True),
+        ).with_for_update()
+    )).all()
+    for chapter, _project in rows:
+        await db.delete(chapter)
+    for _chapter, project in rows:
+        await _update_chapter_count(db, project)
+    await db.commit()
+    return len(rows)
+
+
+async def get_recycled_outline_volumes(db: AsyncSession, user_id: int):
+    query = select(OutlineVolume, Project.projectname, Project.status).join(Project).where(
+        Project.user_id == user_id,
+        OutlineVolume.is_deleted.is_(True),
+    ).order_by(OutlineVolume.updated_at.desc(), OutlineVolume.id.desc())
+    return (await db.execute(query)).all()
+
+
+async def _get_outline_volume_for_update(db: AsyncSession, volume_id: int, user_id: int):
+    query = select(OutlineVolume, Project).join(Project).where(
+        OutlineVolume.id == volume_id,
+        Project.user_id == user_id,
+        OutlineVolume.is_deleted.is_(True),
+    ).with_for_update()
+    return (await db.execute(query)).one_or_none()
+
+
+async def restore_outline_volume(db: AsyncSession, volume_id: int, user_id: int):
+    match = await _get_outline_volume_for_update(db, volume_id, user_id)
+    if match is None:
+        return None
+    volume, project = match
+    if project.status == "回收站":
+        raise ProjectInRecycleBinError("请先还原所属作品，再还原卷纲")
+    volume.is_deleted = False
+    await db.commit()
+    await db.refresh(volume)
+    return volume
+
+
+async def permanently_delete_outline_volume(db: AsyncSession, volume_id: int, user_id: int):
+    match = await _get_outline_volume_for_update(db, volume_id, user_id)
+    if match is None:
+        return False
+    volume, _project = match
+    await db.delete(volume)
+    await db.commit()
+    return True
+
+
+async def permanently_delete_all_outline_volumes(db: AsyncSession, user_id: int) -> int:
+    result = await db.scalars(
+        select(OutlineVolume).join(Project).where(
+            Project.user_id == user_id,
+            OutlineVolume.is_deleted.is_(True),
+        ).with_for_update()
+    )
+    volumes = list(result.all())
+    for volume in volumes:
+        await db.delete(volume)
+    await db.commit()
+    return len(volumes)
+
+
 async def get_recycled_knowledge_bases(db: AsyncSession, user_id: int):
     query = select(KnowledgeBase).options(selectinload(KnowledgeBase.documents)).where(
         KnowledgeBase.user_id == user_id,
@@ -198,3 +277,17 @@ async def permanently_delete_knowledge_base(db: AsyncSession, base_id: int, user
     await db.delete(base)
     await db.commit()
     return True
+
+
+async def permanently_delete_all_knowledge_bases(db: AsyncSession, user_id: int) -> int:
+    bases = list((await db.scalars(select(KnowledgeBase).where(
+        KnowledgeBase.user_id == user_id,
+        KnowledgeBase.is_deleted.is_(True),
+    ).options(selectinload(KnowledgeBase.documents)).with_for_update())).all())
+    for base in bases:
+        document_ids = select(KnowledgeDocument.id).where(KnowledgeDocument.knowledge_base_id == base.id)
+        await db.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id.in_(document_ids)))
+        await db.execute(delete(KnowledgeDocument).where(KnowledgeDocument.knowledge_base_id == base.id))
+        await db.delete(base)
+    await db.commit()
+    return len(bases)

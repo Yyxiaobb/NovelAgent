@@ -1,9 +1,6 @@
 import json
 
 
-PROJECT_TYPES = "玄幻、都市、言情、悬疑、科幻、历史、武侠、现实、灵异、同人、儿童、其他"
-
-
 def json_candidate(raw: str):
     candidate = raw.strip()
     if candidate.startswith("```"):
@@ -20,7 +17,9 @@ def text_value(value) -> str:
 
 
 def outline_max_tokens(expected_words: int) -> int:
-    return max(1800, min(7000, round(expected_words * 0.05)))
+    # A full-book outline stays concise regardless of novel length; the target
+    # novel word count informs scope, not the size of the outline itself.
+    return 5000
 
 
 def plan_max_tokens(expected_words: int) -> int:
@@ -28,7 +27,7 @@ def plan_max_tokens(expected_words: int) -> int:
 
 
 def memory_max_tokens(content: str) -> int:
-    return max(700, min(6000, round(len(content) * 0.18)))
+    return max(2200, min(8000, round(len(content) * 0.2)))
 
 
 def content_max_tokens(expected_words: int) -> int:

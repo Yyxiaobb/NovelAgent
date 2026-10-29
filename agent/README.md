@@ -33,12 +33,12 @@ python -m pip install -r agent/requirements.txt
 在项目根目录的 `.env` 中添加以下配置，模型名称、密钥和服务地址以供应商提供的信息为准；地址通常包含 `/v1`，不要填写到 `/chat/completions`：
 
 ```dotenv
-LLM_MODEL=your-model-id
-LLM_API_KEY=your-api-key
-LLM_BASE_URL=https://your-provider.example/v1
-LLM_PROVIDER=your-provider
-LLM_TIMEOUT=60
-LLM_MAX_RETRIES=2
+API_KEY=your-api-key
+BASE_URL=https://your-provider.example/v1
+MODEL=your-model-id
+PROVIDER=openai-compatible
+TIMEOUT=300
+MAX_RETRIES=2
 ```
 
 `model`、`api_key`、`base_url` 必填。`provider` 仅是服务标识，不决定 URL 或协议。HTTP 地址可用于本地兼容服务，公网服务建议使用 HTTPS。`.env` 不应提交到 Git。
@@ -53,13 +53,11 @@ RAG_EMBEDDING_API_KEY=your-embedding-api-key
 RAG_EMBEDDING_BASE_URL=https://your-embedding-provider.example/v1
 ```
 
-如果未设置 `RAG_EMBEDDING_API_KEY` 和 `RAG_EMBEDDING_BASE_URL`，系统会依次尝试复用 `LLM_API_KEY` / `API_KEY` 与 `LLM_BASE_URL` / `BASE_URL`。只有当前模型供应商提供兼容的 `/embeddings` 接口，并支持 `RAG_EMBEDDING_MODEL` 指定的模型时才能直接复用；否则需要单独申请 Embedding 服务的 API Key。
+如果未设置 `RAG_EMBEDDING_API_KEY` 和 `RAG_EMBEDDING_BASE_URL`，系统会复用 `API_KEY` 与 `BASE_URL`。只有当前模型供应商提供兼容的 `/embeddings` 接口，并支持 `RAG_EMBEDDING_MODEL` 指定的模型时才能直接复用；否则需要单独申请 Embedding 服务的 API Key。
 
 当前版本将向量以 JSON 保存在应用数据库，并在应用层计算相似度，适合个人和小规模知识库。文档数量和片段量明显增长后，建议迁移到 pgvector、Qdrant 或 Milvus。后台索引目前使用 FastAPI `BackgroundTasks`，服务重启会中断正在执行的索引，可在知识库页面点击“重试”。
 
-后端的智能体路由 `POST /api/agent/project-field` 使用该客户端为作品名称、作品简介或作品类型生成候选内容，需要登录并先配置上述模型环境变量。
-
-构造参数优先于环境变量；环境变量优先于 `.env` 中的同名变量。保留旧配置 `MODEL`、`API_KEY`、`BASE_URL`、`PROVIDER`、`TIMEOUT` 和 `MAX_RETRIES`，但优先读取 `LLM_` 前缀的配置。超时单位为秒，重试使用 SDK 自带机制。
+构造参数优先于环境变量；环境变量优先于 `.env` 中的同名变量。模型配置使用 `MODEL`、`API_KEY`、`BASE_URL`、`PROVIDER`、`TIMEOUT` 和 `MAX_RETRIES`。超时单位为秒，重试使用 SDK 自带机制。
 
 ## 同步调用
 

@@ -55,6 +55,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ))
         get_chapter.assert_awaited_once_with(unittest.mock.ANY, 9, 7, 4)
         self.assertEqual(chapter_result["summary"], "主角找到密道")
+        self.assertNotIn("chaptername", chapter_result)
         self.assertEqual(len(chapter_result["content_excerpt"]), 1200)
 
         prior = [SimpleNamespace(
@@ -70,7 +71,9 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ))
         get_project.assert_awaited_once_with(unittest.mock.ANY, 9, 4)
         get_prior.assert_awaited_once_with(unittest.mock.ANY, 9, 3, limit=4)
-        self.assertEqual(memories[0]["summary"], "暴风将至")
+        self.assertNotIn("summary", memories[0])
+        self.assertEqual(memories[0]["memory"]["timeline"], "黄昏")
+        self.assertNotIn("chaptername", memories[0])
 
     async def test_chapter_context_tool_rejects_invalid_or_cross_project_ids(self):
         from unittest.mock import patch
@@ -91,14 +94,15 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_prompt_and_skill_are_versioned_and_task_scoped(self):
         template, prompt = render_prompt("chapter_plan", project_id=1, chapter_id=2,
-                                         project_name="测试作品", project_type="科幻",
+                                         project_type="科幻",
                                          project_introduction="简介", project_outline="大纲",
-                                         chapter_number=1, chapter_name="启航",
+                                         chapter_number=1,
                                          expected_words=1200, user_idea="营救")
         skill = load_skill("chapter-planning", task_type="chapter_plan")
         self.assertEqual(template.version, "1.0.0")
         self.assertIn("用户想法：营救", prompt)
-        self.assertIn("作品名称：测试作品", prompt)
+        self.assertNotIn("测试作品", prompt)
+        self.assertNotIn("启航", prompt)
         self.assertEqual(skill.version, "1.0.0")
         with self.assertRaises(ValueError):
             load_skill("../agent.py", task_type="chapter_plan")
@@ -106,7 +110,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
     def test_prompt_registry_covers_each_generation_scene(self):
         expected = {
             "project_field", "idea_refinement", "project_outline",
-            "chapter_plan", "chapter_content", "chapter_memory",
+            "outline_volume_planner", "outline_volume_executor", "chapter_plan", "chapter_content", "chapter_memory",
         }
         self.assertTrue(expected.issubset(PROMPTS))
         for template_id in expected:
@@ -115,6 +119,38 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(template.version)
             self.assertTrue(template.system)
             self.assertTrue(template.task_template)
+
+    def test_outline_volume_agent_prompts_plan_and_execute_from_full_book_outline(self):
+        template, prompt = render_prompt(
+            "outline_volume_planner",
+            project_type="科幻",
+            project_introduction="一段星际旅程",
+            expected_words=1000000,
+            project_outline="主角追查异常信号，最终发现宇宙循环的真相。",
+            user_idea="重点描写人物成长",
+        )
+        self.assertEqual(template.version, "1.0.0")
+        self.assertIn("全书目标总字数：1000000 字", prompt)
+        self.assertIn("宇宙循环的真相", prompt)
+        self.assertIn("各卷字数之和必须等于全书目标字数", prompt)
+        self.assertIn('"volumes"', prompt)
+
+        executor, execution_prompt = render_prompt(
+            "outline_volume_executor",
+            project_type="科幻",
+            project_introduction="一段星际旅程",
+            expected_words=1000000,
+            project_outline="主角追查异常信号，最终发现宇宙循环的真相。",
+            volume_plan="全书分卷计划 JSON",
+            current_volume="第一卷执行计划",
+            previous_volumes="前序卷纲",
+            reference_context="参考资料",
+        )
+        self.assertIn("Planner 的完整分卷计划", execution_prompt)
+        self.assertIn("当前执行任务", execution_prompt)
+        self.assertIn("前序卷已生成卷纲", execution_prompt)
+        self.assertNotIn("星河归途", prompt + execution_prompt)
+        self.assertEqual(executor.id, "outline_volume_executor")
 
 
 if __name__ == "__main__":

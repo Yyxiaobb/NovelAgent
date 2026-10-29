@@ -90,29 +90,21 @@ class LLMConfigTests(EnvironmentCase):
                 with self.assertRaises(LLMConfigurationError):
                     LLMClient(**config)
 
-    def test_prefixed_environment_variables_and_legacy_fallback(self):
+    def test_environment_variables_use_shared_model_names(self):
         os.environ.update({
-            "MODEL": "legacy-model", "API_KEY": "legacy-key", "BASE_URL": "https://old.test/v1",
-            "LLM_MODEL": "preferred-model", "LLM_API_KEY": "preferred-key",
-            "LLM_BASE_URL": "https://preferred.test/v1", "LLM_TIMEOUT": "12.5",
-            "LLM_MAX_RETRIES": "0", "LLM_PROVIDER": "test-provider",
+            "MODEL": "test-model", "API_KEY": "test-key", "BASE_URL": "https://test.test/v1",
+            "TIMEOUT": "12.5", "MAX_RETRIES": "0", "PROVIDER": "test-provider",
         })
         config = LLMConfig.from_env()
-        self.assertEqual(config.model, "preferred-model")
-        self.assertEqual(config.api_key, "preferred-key")
-        self.assertEqual(config.base_url, "https://preferred.test/v1")
+        self.assertEqual(config.model, "test-model")
+        self.assertEqual(config.api_key, "test-key")
+        self.assertEqual(config.base_url, "https://test.test/v1")
         self.assertEqual(config.provider, "test-provider")
         self.assertEqual(config.timeout, 12.5)
         self.assertEqual(config.max_retries, 0)
-        for name in ("LLM_MODEL", "LLM_API_KEY", "LLM_BASE_URL"):
-            del os.environ[name]
-        legacy = LLMConfig.from_env()
-        self.assertEqual((legacy.model, legacy.api_key, legacy.base_url), (
-            "legacy-model", "legacy-key", "https://old.test/v1",
-        ))
 
     def test_explicit_parameters_override_env_and_dotenv_preserves_environment(self):
-        os.environ.update({"LLM_MODEL": "environment-model", "LLM_TIMEOUT": "bad", "LLM_MAX_RETRIES": "bad"})
+        os.environ.update({"MODEL": "environment-model", "TIMEOUT": "bad", "MAX_RETRIES": "bad"})
         config = LLMConfig.from_env(**SETTINGS, timeout=5, max_retries=0)
         self.assertEqual(config.model, "test-model")
         self.assertEqual(config.timeout, 5)
@@ -128,7 +120,7 @@ class LLMConfigTests(EnvironmentCase):
                 LLMClient(**SETTINGS, max_retries=value)
 
     def test_invalid_env_numbers_raise_configuration_error(self):
-        for name in ("LLM_TIMEOUT", "LLM_MAX_RETRIES"):
+        for name in ("TIMEOUT", "MAX_RETRIES"):
             with self.subTest(variable=name), patch.dict(os.environ, {name: "invalid"}):
                 with self.assertRaises(LLMConfigurationError):
                     LLMClient(**SETTINGS)
@@ -140,7 +132,7 @@ class LLMConfigTests(EnvironmentCase):
             self.assertNotIn("secret", str(raised.exception))
         config = LLMConfig.from_env(**SETTINGS)
         self.assertNotIn(SETTINGS["api_key"], repr(config))
-        self.assertEqual(config.timeout, 60)
+        self.assertEqual(config.timeout, 300)
         self.assertEqual(config.max_retries, 2)
         self.assertIsInstance(LLMConfigurationError("test"), ValueError)
         self.assertIsInstance(LLMConfigurationError("test"), LLMError)
@@ -185,7 +177,7 @@ class LLMSyncTests(EnvironmentCase):
             "model": "test-model", "messages": MESSAGES, "stream": False, "temperature": 0, "max_tokens": 100,
         })
         self.constructor.assert_called_once_with(**{
-            "api_key": SETTINGS["api_key"], "base_url": SETTINGS["base_url"], "timeout": 60.0, "max_retries": 0,
+            "api_key": SETTINGS["api_key"], "base_url": SETTINGS["base_url"], "timeout": 300.0, "max_retries": 0,
         })
 
     def test_raw_completion_preserves_usage_and_tool_calls(self):
@@ -257,6 +249,16 @@ class LLMSyncTests(EnvironmentCase):
                     self.llm.chat(MESSAGES)
                 self.assertEqual(raised.exception.status_code, code)
                 self.assertNotIn("secret", str(raised.exception))
+
+    def test_unpurchased_model_error_is_actionable(self):
+        self.reply = lambda _: httpx.Response(
+            403,
+            json={"code": "AccessDenied.Unpurchased", "message": "model access denied"},
+        )
+        with self.assertRaises(LLMRequestError) as raised:
+            self.llm.chat(MESSAGES)
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertIn("未开通", str(raised.exception))
 
     def test_network_errors_are_translated(self):
         for failure in (httpx.ConnectError("secret"), httpx.ReadTimeout("secret")):

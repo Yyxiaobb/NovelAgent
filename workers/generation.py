@@ -7,11 +7,16 @@ from config.queue_conf import REDIS_URL
 from crud import generation as generation_crud
 from services.agent_generation import content_max_tokens
 from services.chapter_generation import run_content_job
+from services.chapter_memory_generation import run_chapter_memory_job
 from services.generation_runtime import generation_client
 
 
 async def generate_chapter_content(ctx: dict, job_id: str) -> None:
     await run_content_job(job_id, AsyncSessionLocal, generation_client, content_max_tokens)
+
+
+async def generate_chapter_memory(ctx: dict, job_id: str) -> None:
+    await run_chapter_memory_job(job_id, AsyncSessionLocal, generation_client)
 
 
 async def startup(ctx: dict) -> None:
@@ -21,7 +26,8 @@ async def startup(ctx: dict) -> None:
     for job in pending:
         # ARQ's stable job id prevents duplicate enqueue when another worker
         # still owns the job or when startup recovery is run more than once.
-        await ctx["redis"].enqueue_job("generate_chapter_content", job.id, _job_id=job.id)
+        function = "generate_chapter_memory" if job.job_type == "chapter_memory" else "generate_chapter_content"
+        await ctx["redis"].enqueue_job(function, job.id, _job_id=job.id)
 
 
 async def shutdown(ctx: dict) -> None:
@@ -29,7 +35,7 @@ async def shutdown(ctx: dict) -> None:
 
 
 class WorkerSettings:
-    functions = [generate_chapter_content]
+    functions = [generate_chapter_content, generate_chapter_memory]
     redis_settings = RedisSettings.from_dsn(REDIS_URL)
     on_startup = startup
     on_shutdown = shutdown

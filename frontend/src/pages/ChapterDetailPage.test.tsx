@@ -80,6 +80,7 @@ describe('章节详情页', () => {
     renderPage()
     expect(await screen.findByRole('heading', { name: '启航' })).toBeTruthy()
     expect(screen.getByText('飞船离开了港口。')).toBeTruthy()
+    expect(screen.getByText('8 字')).toBeTruthy()
     expect(screen.getByRole('link', { name: '返回作品详情' }).getAttribute('href')).toBe('/projects/12')
 
     await userEvent.click(screen.getByRole('button', { name: '编辑章节' }))
@@ -89,6 +90,7 @@ describe('章节详情页', () => {
     await userEvent.type(screen.getByLabelText('章节名称'), '新启航')
     await userEvent.clear(screen.getByLabelText('章节内容'))
     await userEvent.type(screen.getByLabelText('章节内容'), '修订后的内容')
+    expect(screen.getByText('6 字')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: '保存修改' }))
 
     expect(api.updateChapter).toHaveBeenCalledWith(12, 8, {
@@ -100,18 +102,41 @@ describe('章节详情页', () => {
     expect(screen.getByText('修订后的内容')).toBeTruthy()
   })
 
-  it('保存正文后不等待章节记忆整理完成', async () => {
-    let finishMemory!: (value: {
-      project_id: number
-      chapter_id: number
-      summary: string
-      memory: { character_state: string; setting_changes: string; unresolved_threads: string; timeline: string }
-    }) => void
-    vi.mocked(api.generateChapterMemory).mockReturnValue(
-      new Promise(resolve => {
-        finishMemory = resolve
-      }),
-    )
+  it('编辑时只显示一个细纲输入框，没有细纲时保持空白', async () => {
+    renderPage()
+    await screen.findByRole('heading', { name: '启航' })
+    await userEvent.click(screen.getByRole('button', { name: '编辑章节' }))
+
+    const outline = screen.getByLabelText('本章细纲') as HTMLTextAreaElement
+    expect(outline.value).toBe('')
+    expect(screen.getAllByText('本章细纲')).toHaveLength(1)
+    expect(screen.queryByLabelText('本章目标')).toBeNull()
+    expect(screen.queryByLabelText('核心冲突')).toBeNull()
+    expect(screen.queryByLabelText('关键情节')).toBeNull()
+    expect(screen.queryByLabelText('结尾钩子')).toBeNull()
+    expect(screen.queryByLabelText('本章细纲目标字数')).toBeNull()
+  })
+
+  it('编辑已有细纲时只显示一个标题并回填当前细纲', async () => {
+    vi.mocked(api.getChapter).mockResolvedValue({
+      ...chapter,
+      plan: {
+        objective: '离开星港',
+        conflict: '遭遇追兵',
+        key_events: '发现异常信号',
+        ending_hook: '信号突然回应',
+        expected_words: 2500,
+      },
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: '启航' })
+    await userEvent.click(screen.getByRole('button', { name: '编辑章节' }))
+
+    expect(screen.getAllByText('本章细纲')).toHaveLength(1)
+    expect((screen.getByLabelText('本章细纲') as HTMLTextAreaElement).value).toContain('本章目标：离开星港')
+  })
+
+  it('保存正文后由后端异步整理章节记忆，不依赖当前页面', async () => {
     renderPage()
     await screen.findByRole('heading', { name: '启航' })
     await userEvent.click(screen.getByRole('button', { name: '编辑章节' }))
@@ -119,16 +144,8 @@ describe('章节详情页', () => {
     await userEvent.click(screen.getByRole('button', { name: '保存修改' }))
 
     expect(await screen.findByRole('button', { name: '编辑章节' })).toBeTruthy()
-    expect(screen.getByRole('status').textContent).toContain('摘要正在整理')
-    expect(api.generateChapterMemory).toHaveBeenCalledWith(chapter.project_id, chapter.id)
-
-    finishMemory({
-      project_id: chapter.project_id,
-      chapter_id: chapter.id,
-      summary: '整理后的摘要',
-      memory: { character_state: '状态', setting_changes: '设定', unresolved_threads: '线索', timeline: '时间线' },
-    })
-    expect(await screen.findByText('整理后的摘要')).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toContain('将在后台整理')
+    expect(api.generateChapterMemory).not.toHaveBeenCalled()
   })
 
   it('编辑章节时可智能生成正文并将结果放入编辑框', async () => {
@@ -136,13 +153,11 @@ describe('章节详情页', () => {
     await screen.findByRole('heading', { name: '启航' })
     expect(screen.queryByRole('button', { name: '智能生成' })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: '编辑章节' }))
-    await userEvent.type(screen.getByLabelText('本章目标'), '完成启航')
-    await userEvent.type(screen.getByLabelText('核心冲突'), '面对未知风险')
-    await userEvent.type(screen.getByLabelText('关键情节'), '飞船离港；发现信号')
-    await userEvent.type(screen.getByLabelText('结尾钩子'), '信号来自船内')
-    await userEvent.clear(screen.getByLabelText('本章规划目标字数'))
-    await userEvent.type(screen.getByLabelText('本章规划目标字数'), '2500')
-    await userEvent.click(screen.getByRole('button', { name: '按规划生成正文' }))
+    await userEvent.type(
+      screen.getByLabelText('本章细纲'),
+      '本章目标：完成启航\n核心冲突：面对未知风险\n关键情节：飞船离港；发现信号\n结尾钩子：信号来自船内',
+    )
+    await userEvent.click(screen.getByRole('button', { name: '按细纲生成正文' }))
     expect(screen.queryByLabelText('章节生成目标字数')).toBeNull()
     await userEvent.type(screen.getByLabelText('章节生成想法'), '结尾出现新的线索')
     await userEvent.click(screen.getByRole('button', { name: '生成章节' }))
@@ -154,7 +169,7 @@ describe('章节详情页', () => {
         conflict: '面对未知风险',
         key_events: '飞船离港；发现信号',
         ending_hook: '信号来自船内',
-        expected_words: 2500,
+        expected_words: 3000,
       },
       '结尾出现新的线索',
     )
@@ -162,16 +177,16 @@ describe('章节详情页', () => {
     expect(api.updateChapter).not.toHaveBeenCalled()
   })
 
-  it('编辑章节时显示章节规划智能生成入口并将结果填入规划字段', async () => {
+  it('编辑章节时显示章节细纲智能生成入口并将结果填入单个细纲输入框', async () => {
     renderPage()
     await screen.findByRole('heading', { name: '启航' })
     await userEvent.click(screen.getByRole('button', { name: '编辑章节' }))
-    await userEvent.click(screen.getByRole('button', { name: '智能生成规划' }))
-    await userEvent.type(screen.getByLabelText('章节规划想法'), '让主角发现神秘信号')
-    await userEvent.click(screen.getByRole('button', { name: '生成规划' }))
+    await userEvent.click(screen.getByRole('button', { name: '智能生成细纲' }))
+    await userEvent.type(screen.getByLabelText('细纲生成想法'), '让主角发现神秘信号')
+    await userEvent.click(screen.getByRole('button', { name: '生成细纲' }))
 
     expect(api.generateChapterPlan).toHaveBeenCalledWith(12, 8, 3000, '让主角发现神秘信号')
-    expect((screen.getByLabelText('本章目标') as HTMLTextAreaElement).value).toBe('目标')
+    expect((screen.getByLabelText('本章细纲') as HTMLTextAreaElement).value).toContain('本章目标：目标')
   })
 
   it('从章节详情跳转到独立的生成历史页，历史记录可带入章节草稿', async () => {

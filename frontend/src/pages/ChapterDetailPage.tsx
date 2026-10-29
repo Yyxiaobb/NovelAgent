@@ -17,6 +17,55 @@ import type { Chapter, ChapterMemory, ChapterPlan, ChapterVersion, GenerationJob
 import { KnowledgeBaseSelector } from '../components/KnowledgeBaseSelector'
 import { KnowledgeCitationList } from '../components/KnowledgeCitationList'
 
+function formatChapterPlan(plan?: ChapterPlan | null) {
+  if (!plan) return ''
+  return [
+    plan.objective && `本章目标：${plan.objective}`,
+    plan.conflict && `核心冲突：${plan.conflict}`,
+    plan.key_events && `关键情节：${plan.key_events}`,
+    plan.ending_hook && `结尾钩子：${plan.ending_hook}`,
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+function parseChapterPlan(text: string, expectedWords: number, current: ChapterPlan): ChapterPlan {
+  const fields: Record<string, string> = {}
+  const labels: Record<string, string> = {
+    本章目标: 'objective',
+    核心冲突: 'conflict',
+    关键情节: 'key_events',
+    结尾钩子: 'ending_hook',
+  }
+  let activeField = ''
+  for (const line of text.split('\n')) {
+    const match = line.match(/^(本章目标|核心冲突|关键情节|结尾钩子)[：:]\s*(.*)$/)
+    if (match) {
+      activeField = labels[match[1]]
+      fields[activeField] = match[2]
+    } else if (activeField) {
+      fields[activeField] += `${fields[activeField] ? '\n' : ''}${line}`
+    }
+  }
+  if (!Object.keys(fields).length) {
+    const outline = text.trim()
+    return {
+      objective: outline.slice(0, 2000),
+      conflict: current.conflict || '围绕本章细纲推进主要冲突',
+      key_events: outline.slice(0, 10000),
+      ending_hook: current.ending_hook || '按本章细纲安排结尾钩子',
+      expected_words: expectedWords,
+    }
+  }
+  return {
+    objective: fields.objective || current.objective || '围绕本章细纲展开剧情',
+    conflict: fields.conflict || current.conflict || '围绕本章细纲推进主要冲突',
+    key_events: fields.key_events || current.key_events || text.trim(),
+    ending_hook: fields.ending_hook || current.ending_hook || '按本章细纲安排结尾钩子',
+    expected_words: expectedWords,
+  }
+}
+
 export function ChapterDetailPage() {
   const { projectId, chapterId, feature } = useParams()
   const location = useLocation()
@@ -31,6 +80,7 @@ export function ChapterDetailPage() {
     ending_hook: '',
     expected_words: 3000,
   })
+  const [planTextDraft, setPlanTextDraft] = useState('')
   const [summaryDraft, setSummaryDraft] = useState('')
   const [memoryDraft, setMemoryDraft] = useState<ChapterMemory | null>(null)
   const [editing, setEditing] = useState(false)
@@ -58,6 +108,11 @@ export function ChapterDetailPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<number[]>([])
   const [knowledgeCitations, setKnowledgeCitations] = useState<KnowledgeCitation[]>([])
+  const [pendingVolumeProgress, setPendingVolumeProgress] = useState<{
+    volumeId: number | null
+    complete: boolean
+    note: string | null
+  } | null>(null)
 
   const loadChapter = useCallback(async () => {
     const project = Number(projectId)
@@ -73,6 +128,7 @@ export function ChapterDetailPage() {
       content: value.content || '',
     })
     setPlanDraft(value.plan || { objective: '', conflict: '', key_events: '', ending_hook: '', expected_words: 3000 })
+    setPlanTextDraft(formatChapterPlan(value.plan))
     setSummaryDraft(value.summary || '')
     setMemoryDraft(value.memory || null)
   }, [chapterId, projectId])
@@ -91,7 +147,10 @@ export function ChapterDetailPage() {
     if (feature === 'edit' && restoreState?.generatedContent) {
       setEditing(true)
       setDraft(current => ({ ...current, content: restoreState.generatedContent || '' }))
-      if (restoreState.plan) setPlanDraft(restoreState.plan)
+      if (restoreState.plan) {
+        setPlanDraft(restoreState.plan)
+        setPlanTextDraft(formatChapterPlan(restoreState.plan))
+      }
     }
     if (feature === 'plan' && !loading) setPlanGenerationOpen(true)
     if (feature === 'generate' && !loading) setGenerationDialogOpen(true)
@@ -202,6 +261,7 @@ export function ChapterDetailPage() {
       setPlanDraft(
         restored.plan || { objective: '', conflict: '', key_events: '', ending_hook: '', expected_words: 3000 },
       )
+      setPlanTextDraft(formatChapterPlan(restored.plan))
       setSummaryDraft(restored.summary || '')
       setMemoryDraft(restored.memory || null)
       setEditing(false)
@@ -222,6 +282,7 @@ export function ChapterDetailPage() {
       content: chapter.content || '',
     })
     setPlanDraft(chapter.plan || { objective: '', conflict: '', key_events: '', ending_hook: '', expected_words: 3000 })
+    setPlanTextDraft(formatChapterPlan(chapter.plan))
     setSummaryDraft(chapter.summary || '')
     setMemoryDraft(chapter.memory || null)
     setNotice('')
@@ -238,6 +299,7 @@ export function ChapterDetailPage() {
       setPlanDraft(
         chapter.plan || { objective: '', conflict: '', key_events: '', ending_hook: '', expected_words: 3000 },
       )
+      setPlanTextDraft(formatChapterPlan(chapter.plan))
       setSummaryDraft(chapter.summary || '')
       setMemoryDraft(chapter.memory || null)
     }
@@ -255,13 +317,8 @@ export function ChapterDetailPage() {
     setSaving(true)
     setNotice('')
     try {
-      const plan =
-        planDraft.objective.trim() ||
-        planDraft.conflict.trim() ||
-        planDraft.key_events.trim() ||
-        planDraft.ending_hook.trim()
-          ? planDraft
-          : undefined
+      const parsedPlan = parseChapterPlan(planTextDraft, planDraft.expected_words, planDraft)
+      const plan = planTextDraft.trim() ? parsedPlan : chapter.plan ? null : undefined
       const contentChanged = draft.content !== (chapter.content || '')
       const summaryChanged = summaryDraft !== (chapter.summary || '')
       const memoryChanged = JSON.stringify(memoryDraft) !== JSON.stringify(chapter.memory || null)
@@ -271,6 +328,13 @@ export function ChapterDetailPage() {
         chapter_number: number,
         chaptername: draft.chaptername.trim(),
         content: draft.content,
+        ...(pendingVolumeProgress
+          ? {
+              volume_id: pendingVolumeProgress.volumeId,
+              volume_complete: pendingVolumeProgress.complete,
+              volume_completion_note: pendingVolumeProgress.note,
+            }
+          : {}),
         ...(plan ? { plan } : {}),
         ...(summaryChanged ? { summary: summaryDraft || null } : {}),
         ...(memoryChanged ? { memory: memoryDraft } : {}),
@@ -284,21 +348,13 @@ export function ChapterDetailPage() {
       setSummaryDraft(updated.summary || summaryDraft)
       setMemoryDraft(updated.memory || memoryDraft)
       setEditing(false)
-      setNotice('章节修改已保存')
-      if (shouldRefreshMemory && api.generateChapterMemory) {
-        setNotice('章节已保存，摘要正在整理')
-        void api
-          .generateChapterMemory(chapter.project_id, chapter.id)
-          .then(memory => {
-            setChapter(current => (current ? { ...current, summary: memory.summary, memory: memory.memory } : current))
-            setSummaryDraft(memory.summary)
-            setMemoryDraft(memory.memory)
-            setNotice('章节已保存，摘要和前文记忆已更新')
-          })
-          .catch(() => {
-            setNotice('章节已保存，但摘要整理失败，可稍后重试')
-          })
-      }
+      setNotice(
+        pendingVolumeProgress?.complete
+          ? '章节已保存，模型判断本卷目标已完成；后续细纲将进入下一卷。'
+          : '章节修改已保存',
+      )
+      setPendingVolumeProgress(null)
+      if (shouldRefreshMemory) setNotice('章节已保存，摘要和前文记忆将在后台整理')
     } catch (reason) {
       setNotice(reason instanceof Error ? reason.message : '章节保存失败，请稍后重试')
     } finally {
@@ -320,11 +376,21 @@ export function ChapterDetailPage() {
         ? await api.generateChapterPlan(chapter.project_id, chapter.id, words, planGenerationIdea, knowledgeBaseIds)
         : await api.generateChapterPlan(chapter.project_id, chapter.id, words, planGenerationIdea)
       setPlanDraft(result.plan)
+      setPlanTextDraft(formatChapterPlan(result.plan))
+      setPendingVolumeProgress({
+        volumeId: result.volume_id ?? null,
+        complete: result.volume_complete === true,
+        note: result.volume_completion_note || null,
+      })
       setKnowledgeCitations(result.citations || [])
       setPlanGenerationOpen(false)
-      setNotice('章节规划已生成，请检查后保存章节')
+      setNotice(
+        result.volume_complete
+          ? `本章细纲已生成，模型判断本卷目标已完成；保存后才会进入下一卷。${result.volume_completion_note ? `依据：${result.volume_completion_note}` : ''}`
+          : '本章细纲已生成，请检查后保存章节',
+      )
     } catch (reason) {
-      setGenerationError(reason instanceof Error ? reason.message : '章节规划生成失败，请稍后重试')
+      setGenerationError(reason instanceof Error ? reason.message : '本章细纲生成失败，请稍后重试')
     } finally {
       setPlanGenerating(false)
     }
@@ -337,13 +403,8 @@ export function ChapterDetailPage() {
       setGenerationError('请输入 1 到 100000 之间的本章目标字数')
       return
     }
-    if (
-      !planDraft.objective.trim() ||
-      !planDraft.conflict.trim() ||
-      !planDraft.key_events.trim() ||
-      !planDraft.ending_hook.trim()
-    ) {
-      setGenerationError('请先填写或生成完整的章节规划')
+    if (!planTextDraft.trim()) {
+      setGenerationError('请先填写或生成完整的本章细纲')
       return
     }
     setGenerating(true)
@@ -351,7 +412,7 @@ export function ChapterDetailPage() {
     setGenerationError('')
     setDraft(current => ({ ...current, content: '' }))
     try {
-      const plan = { ...planDraft, expected_words: words }
+      const plan = parseChapterPlan(planTextDraft, words, planDraft)
       const streamGenerator = (
         api as typeof api & { generateChapterContentStream?: typeof api.generateChapterContentStream }
       ).generateChapterContentStream
@@ -479,8 +540,8 @@ export function ChapterDetailPage() {
                           {job.generation_info && (
                             <small>
                               Prompt {job.generation_info.prompt_template_id} v
-                              {job.generation_info.prompt_template_version} ·{' '}
-                              {job.generation_info.segments ?? 1} 段 · 质量检查通过
+                              {job.generation_info.prompt_template_version} · {job.generation_info.segments ?? 1} 段 ·
+                              质量检查通过
                             </small>
                           )}
                           {job.error && <p className="error-copy">{job.error}</p>}
@@ -542,7 +603,7 @@ export function ChapterDetailPage() {
                         },
                         { label: '正文', oldValue: compared.content || '', newValue: chapter.content || '' },
                         {
-                          label: '章节规划',
+                          label: '章节细纲',
                           oldValue: JSON.stringify(compared.plan || null, null, 2) || '',
                           newValue: JSON.stringify(chapter.plan || null, null, 2) || '',
                         },
@@ -630,6 +691,8 @@ export function ChapterDetailPage() {
       </div>
     )
   }
+
+  const displayedContent = editing ? draft.content : chapter.content || ''
 
   return (
     <div className="page detail-page">
@@ -734,7 +797,7 @@ export function ChapterDetailPage() {
             </div>
             <section className="chapter-plan-panel">
               <div className="editor-field-heading">
-                <span>章节规划</span>
+                <span>本章细纲</span>
                 {editing && (
                   <button
                     className="secondary-button"
@@ -747,61 +810,19 @@ export function ChapterDetailPage() {
                     disabled={planGenerating || saving}
                   >
                     <Sparkles size={15} />
-                    智能生成规划
+                    智能生成细纲
                   </button>
                 )}
               </div>
               {editing ? (
-                <div className="chapter-plan-fields">
-                  <label className="detail-edit-field">
-                    <span>本章目标</span>
-                    <textarea
-                      value={planDraft.objective}
-                      onChange={event => setPlanDraft(current => ({ ...current, objective: event.target.value }))}
-                      rows={3}
-                      aria-label="本章目标"
-                    />
-                  </label>
-                  <label className="detail-edit-field">
-                    <span>核心冲突</span>
-                    <textarea
-                      value={planDraft.conflict}
-                      onChange={event => setPlanDraft(current => ({ ...current, conflict: event.target.value }))}
-                      rows={3}
-                      aria-label="核心冲突"
-                    />
-                  </label>
-                  <label className="detail-edit-field">
-                    <span>关键情节</span>
-                    <textarea
-                      value={planDraft.key_events}
-                      onChange={event => setPlanDraft(current => ({ ...current, key_events: event.target.value }))}
-                      rows={5}
-                      aria-label="关键情节"
-                    />
-                  </label>
-                  <label className="detail-edit-field">
-                    <span>结尾钩子</span>
-                    <textarea
-                      value={planDraft.ending_hook}
-                      onChange={event => setPlanDraft(current => ({ ...current, ending_hook: event.target.value }))}
-                      rows={3}
-                      aria-label="结尾钩子"
-                    />
-                  </label>
-                  <label className="detail-edit-field plan-words-field">
-                    <span>本章目标字数</span>
-                    <input
-                      type="number"
-                      min="1"
-                      max="100000"
-                      value={planDraft.expected_words}
-                      onChange={event =>
-                        setPlanDraft(current => ({ ...current, expected_words: Number(event.target.value) }))
-                      }
-                      aria-label="本章规划目标字数"
-                    />
-                  </label>
+                <div className="detail-edit-field chapter-outline-field">
+                  <textarea
+                    value={planTextDraft}
+                    onChange={event => setPlanTextDraft(event.target.value)}
+                    rows={10}
+                    aria-label="本章细纲"
+                    placeholder="填写本章细纲，或使用智能生成。"
+                  />
                 </div>
               ) : chapter.plan ? (
                 <div className="chapter-plan-summary">
@@ -823,7 +844,7 @@ export function ChapterDetailPage() {
                   </p>
                 </div>
               ) : (
-                <p className="chapter-plan-empty">尚未制定章节规划。</p>
+                <p className="chapter-plan-empty">尚未制定本章细纲。</p>
               )}
             </section>
             <section className="chapter-memory-panel">
@@ -882,21 +903,26 @@ export function ChapterDetailPage() {
                     disabled={generating || saving}
                   >
                     <Sparkles size={15} />
-                    按规划生成正文
+                    按细纲生成正文
                   </button>
                 )}
               </div>
-              {editing ? (
-                <textarea
-                  value={draft.content}
-                  onChange={event => setDraft(current => ({ ...current, content: event.target.value }))}
-                  rows={20}
-                  aria-label="章节内容"
-                  placeholder="在这里写下章节内容…"
-                />
-              ) : (
-                <div className="chapter-content-view">{chapter.content || '尚未填写章节内容'}</div>
-              )}
+              <div className="chapter-content-editor">
+                {editing ? (
+                  <textarea
+                    value={draft.content}
+                    onChange={event => setDraft(current => ({ ...current, content: event.target.value }))}
+                    rows={20}
+                    aria-label="章节内容"
+                    placeholder="在这里写下章节内容…"
+                  />
+                ) : (
+                  <div className="chapter-content-view">{chapter.content || '尚未填写章节内容'}</div>
+                )}
+                <span className="chapter-content-word-count" aria-live="polite">
+                  {displayedContent.length} 字
+                </span>
+              </div>
             </div>
           </section>
         </div>
@@ -911,12 +937,12 @@ export function ChapterDetailPage() {
             aria-labelledby="chapter-plan-generation-title"
           >
             <div className="modal-header">
-              <h2 id="chapter-plan-generation-title">智能生成章节规划</h2>
+              <h2 id="chapter-plan-generation-title">智能生成本章细纲</h2>
               <button
                 className="icon-button"
                 type="button"
                 onClick={() => setPlanGenerationOpen(false)}
-                aria-label="关闭章节规划生成弹窗"
+                aria-label="关闭细纲生成弹窗"
                 disabled={planGenerating}
               >
                 <X size={18} />
@@ -933,7 +959,7 @@ export function ChapterDetailPage() {
                   onChange={event =>
                     setPlanDraft(current => ({ ...current, expected_words: Number(event.target.value) }))
                   }
-                  aria-label="本章规划目标字数"
+                  aria-label="本章细纲目标字数"
                 />
               </label>
               <label className="detail-edit-field">
@@ -943,7 +969,7 @@ export function ChapterDetailPage() {
                   onChange={event => setPlanGenerationIdea(event.target.value)}
                   rows={5}
                   maxLength={5000}
-                  aria-label="章节规划想法"
+                  aria-label="细纲生成想法"
                   placeholder="例如：本章让主角第一次进入遗迹，并在结尾发现敌人留下的信号。"
                 />
               </label>
@@ -969,7 +995,7 @@ export function ChapterDetailPage() {
                   disabled={planGenerating}
                 >
                   <Sparkles size={15} />
-                  {planGenerating ? '正在生成…' : '生成规划'}
+                  {planGenerating ? '正在生成…' : '生成细纲'}
                 </button>
               </div>
             </div>
@@ -1004,7 +1030,7 @@ export function ChapterDetailPage() {
             </div>
             <div className="modal-body generation-modal-body">
               <p className="generation-context-note">
-                将按照章节规划中的本章目标字数（{planDraft.expected_words} 字）生成正文。
+                将按照本章细纲中的目标字数（{planDraft.expected_words} 字）生成正文。
               </p>
               <label className="detail-edit-field">
                 <span>你的想法（选填）</span>

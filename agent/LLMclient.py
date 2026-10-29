@@ -48,12 +48,9 @@ class LLMResponseError(LLMError):
     """服务返回了无法作为文本使用的响应。"""
 
 
-def _env(name: str, legacy: str, default: Any = None) -> Any:
-    for key in (name, legacy):
-        value = os.getenv(key)
-        if value is not None and value.strip():
-            return value.strip()
-    return default
+def _env(name: str, default: Any = None) -> Any:
+    value = os.getenv(name)
+    return value.strip() if value is not None and value.strip() else default
 
 
 @dataclass(frozen=True)
@@ -62,7 +59,7 @@ class LLMConfig:
     api_key: str = field(repr=False)
     base_url: str
     provider: str = "openai-compatible"
-    timeout: float = 60.0
+    timeout: float = 300.0
     max_retries: int = 2
 
     def __post_init__(self):
@@ -95,8 +92,8 @@ class LLMConfig:
     ) -> LLMConfig:
         # 显式参数 > 进程环境变量 > .env；导入模块时不修改进程环境。
         load_dotenv(override=False)
-        timeout_value = timeout if timeout is not None else _env("LLM_TIMEOUT", "TIMEOUT", "60")
-        retries_value = max_retries if max_retries is not None else _env("LLM_MAX_RETRIES", "MAX_RETRIES", "2")
+        timeout_value = timeout if timeout is not None else _env("TIMEOUT", "300")
+        retries_value = max_retries if max_retries is not None else _env("MAX_RETRIES", "2")
         try:
             parsed_timeout = float(timeout_value)
             parsed_retries = int(retries_value) if isinstance(retries_value, str) else retries_value
@@ -105,10 +102,10 @@ class LLMConfig:
         if isinstance(timeout_value, bool):
             raise LLMConfigurationError("timeout 必须为大于 0 的有限秒数")
         return cls(
-            model=model if model is not None else _env("LLM_MODEL", "MODEL"),
-            api_key=api_key if api_key is not None else _env("LLM_API_KEY", "API_KEY"),
-            base_url=base_url if base_url is not None else _env("LLM_BASE_URL", "BASE_URL"),
-            provider=provider if provider is not None else _env("LLM_PROVIDER", "PROVIDER", "openai-compatible"),
+            model=model if model is not None else _env("MODEL"),
+            api_key=api_key if api_key is not None else _env("API_KEY"),
+            base_url=base_url if base_url is not None else _env("BASE_URL"),
+            provider=provider if provider is not None else _env("PROVIDER", "openai-compatible"),
             timeout=parsed_timeout,
             max_retries=parsed_retries,
         )
@@ -121,6 +118,18 @@ def _request_error(error: OpenAIError | HTTPError) -> LLMRequestError:
     if isinstance(error, (APIConnectionError, HTTPError)):
         return LLMRequestError("无法连接模型服务，请检查服务地址或网络")
     if isinstance(error, APIStatusError):
+        body = getattr(error, "body", None)
+        error_code = body.get("code") if isinstance(body, dict) else None
+        if error.status_code == 403 and error_code == "AccessDenied.Unpurchased":
+            return LLMRequestError(
+                "当前 API Key 未开通所配置的模型，请在模型服务控制台开通该模型，或修改 MODEL 为已开通模型",
+                error.status_code,
+            )
+        if error.status_code in (401, 403):
+            return LLMRequestError(
+                "模型服务鉴权失败或当前 API Key 无权访问该模型，请检查 API_KEY、MODEL 和模型服务权限",
+                error.status_code,
+            )
         return LLMRequestError(f"模型服务请求失败（HTTP {error.status_code}）", error.status_code)
     return LLMRequestError("模型服务调用失败")
 

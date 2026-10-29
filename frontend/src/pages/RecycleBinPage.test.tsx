@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { api } from '../api/client'
-import type { Chapter, Project, RecycledChapter } from '../types'
+import type { Chapter, Project, RecycledChapter, RecycledOutlineVolume } from '../types'
 import { ProjectsPage } from './ProjectsPage'
 import { RecycleBinPage } from './RecycleBinPage'
 
@@ -11,12 +11,22 @@ vi.mock('../api/client', () => ({
   api: {
     getProjects: vi.fn(),
     getRecycledProjects: vi.fn(),
+    permanentlyDeleteAllProjects: vi.fn(),
     createProject: vi.fn(),
     recycleProject: vi.fn(),
     restoreProject: vi.fn(),
     permanentlyDeleteProject: vi.fn(),
     getProjectChapters: vi.fn(),
     getRecycledChapters: vi.fn(),
+    permanentlyDeleteAllChapters: vi.fn(),
+    getRecycledOutlineVolumes: vi.fn(),
+    permanentlyDeleteAllOutlineVolumes: vi.fn(),
+    getRecycledKnowledgeBases: vi.fn(),
+    permanentlyDeleteAllKnowledgeBases: vi.fn(),
+    getRecycledInspirations: vi.fn(),
+    permanentlyDeleteAllInspirations: vi.fn(),
+    restoreOutlineVolume: vi.fn(),
+    permanentlyDeleteOutlineVolume: vi.fn(),
     recycleChapter: vi.fn(),
     restoreChapter: vi.fn(),
     permanentlyDeleteChapter: vi.fn(),
@@ -46,6 +56,22 @@ const chapter: RecycledChapter = {
   project_status: '完结',
 }
 
+const volume: RecycledOutlineVolume = {
+  id: 31,
+  project_id: novel.id,
+  volume_number: 2,
+  name: '第二卷：回声',
+  expected_words: 120000,
+  start_chapter: 41,
+  end_chapter: 80,
+  outline: '主角追查信号来源。',
+  created_at: novel.created_at,
+  updated_at: novel.updated_at,
+  is_deleted: true,
+  projectname: novel.projectname,
+  project_status: '完结',
+}
+
 function renderPage(start = '/recycle-bin') {
   return render(
     <MemoryRouter initialEntries={[start]}>
@@ -67,11 +93,41 @@ beforeEach(() => {
   vi.mocked(api.getRecycledProjects).mockResolvedValue([novel])
   vi.mocked(api.getProjectChapters).mockResolvedValue([])
   vi.mocked(api.getRecycledChapters).mockResolvedValue([])
+  vi.mocked(api.getRecycledOutlineVolumes).mockResolvedValue([])
 })
 
 afterEach(cleanup)
 
 describe('回收站页面', () => {
+  it('为所有可回收内容类型提供筛选标签和数量', async () => {
+    renderPage()
+    await screen.findByRole('heading', { name: '雾港来信' })
+
+    expect(screen.getByText('按内容类型筛选')).toBeTruthy()
+    const filters = screen.getByRole('tablist', { name: '按内容类型筛选回收站' })
+    expect(within(filters).getByRole('tab', { name: '作品 1' })).toBeTruthy()
+    expect(within(filters).getByRole('tab', { name: '章节 0' })).toBeTruthy()
+    expect(within(filters).getByRole('tab', { name: '卷纲 0' })).toBeTruthy()
+    expect(within(filters).getByRole('tab', { name: '知识库 0' })).toBeTruthy()
+    expect(within(filters).getByRole('tab', { name: '灵感 0' })).toBeTruthy()
+  })
+
+  it('当前类型的一键清理需要二次确认，确认后清空该类型', async () => {
+    vi.mocked(api.permanentlyDeleteAllProjects).mockResolvedValue({ deleted_count: 1 })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    renderPage()
+    await screen.findByRole('heading', { name: '雾港来信' })
+    await userEvent.click(screen.getByRole('button', { name: '一键清理作品' }))
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('共 1 项'))
+    expect(api.permanentlyDeleteAllProjects).not.toHaveBeenCalled()
+
+    confirm.mockReturnValue(true)
+    await userEvent.click(screen.getByRole('button', { name: '一键清理作品' }))
+    await waitFor(() => expect(api.permanentlyDeleteAllProjects).toHaveBeenCalledTimes(1))
+    expect(await screen.findByRole('heading', { name: '没有已删除的作品' })).toBeTruthy()
+    confirm.mockRestore()
+  })
+
   it('作品页右上角不再重复显示回收站入口', async () => {
     renderPage('/projects')
     await screen.findByRole('heading', { name: '当前暂无作品，快去创建你的第一个作品吧！' })
@@ -89,6 +145,23 @@ describe('回收站页面', () => {
     await userEvent.type(screen.getByRole('textbox', { name: '搜索回收站' }), '宇宙飞船')
     expect(screen.getByRole('heading', { name: '没有匹配的作品' })).toBeTruthy()
     expect(screen.getByText('共 0 项')).toBeTruthy()
+  })
+
+  it('卷纲筛选可搜索内容并确认还原', async () => {
+    vi.mocked(api.getRecycledOutlineVolumes).mockResolvedValue([volume])
+    vi.mocked(api.restoreOutlineVolume).mockResolvedValue(volume)
+    renderPage()
+    const filters = screen.getByRole('tablist', { name: '按内容类型筛选回收站' })
+    await userEvent.click(await within(filters).findByRole('tab', { name: '卷纲 1' }))
+    expect(await screen.findByRole('heading', { name: '第二卷：回声' })).toBeTruthy()
+    expect(screen.getByText('所属作品：雾港来信')).toBeTruthy()
+    expect(screen.getByText('主角追查信号来源。')).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: '还原第二卷：回声' }))
+    const dialog = screen.getByRole('dialog', { name: '还原卷纲' })
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认还原' }))
+    await waitFor(() => expect(api.restoreOutlineVolume).toHaveBeenCalledWith(volume.id))
+    expectText(await screen.findByRole('status'), '已还原')
   })
 
   it('确认后还原项目并保留原状态，然后从回收站移除该项目', async () => {

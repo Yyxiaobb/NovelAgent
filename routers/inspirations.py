@@ -79,7 +79,7 @@ async def refine_inspiration(
     item = _item_or_404(await inspirations.get_inspiration(db, inspiration_id, user.id))
     template, prompt = render_prompt("idea_refinement", idea=item.content)
     try:
-        async with LLMClient(max_retries=0, timeout=90) as client:
+        async with LLMClient(max_retries=0, timeout=300) as client:
             started = perf_counter()
             refined = (await client.achat([
                 {"role": "system", "content": template.system},
@@ -90,7 +90,7 @@ async def refine_inspiration(
                 prompt_chars=len(prompt), output_chars=len(refined), model=client.model, max_tokens=1800,
             )
     except LLMConfigurationError as error:
-        raise HTTPException(status_code=503, detail="智能生成尚未配置模型，请先配置 LLM_MODEL、LLM_API_KEY 和 LLM_BASE_URL") from error
+        raise HTTPException(status_code=503, detail="智能生成尚未配置模型，请先配置 MODEL、API_KEY 和 BASE_URL") from error
     except LLMRequestError as error:
         raise HTTPException(status_code=504, detail="创意完善响应超时，请稍后重试") from error
     except LLMError as error:

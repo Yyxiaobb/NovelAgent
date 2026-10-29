@@ -12,7 +12,7 @@ import {
   Moon,
   Trash2,
 } from 'lucide-react'
-import { NavLink, Outlet, useLocation, useSearchParams } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { ProjectCreationModal } from './ProjectCreationModal'
@@ -47,6 +47,7 @@ export function AppShell() {
     }
   })
   const { pathname } = useLocation()
+  const navigate = useNavigate()
   const detailMode = /^\/projects\/[^/]+\/(?:outline(?:\/[^/]+)?|chapters\/[^/]+(?:\/[^/]+)?)$/.test(pathname)
   const [searchParams, setSearchParams] = useSearchParams()
   const creationOpen = searchParams.get('create') === '1'
@@ -168,11 +169,10 @@ export function AppShell() {
 
       <ProjectCreationModal
         open={creationOpen}
-        draftKey={user?.id ? String(user.id) : undefined}
         onClose={closeCreation}
-        onCreated={() => {
+        onCreated={project => {
           window.dispatchEvent(new Event('projects:changed'))
-          closeCreation()
+          navigate(`/projects/${project.id}`)
         }}
       />
 

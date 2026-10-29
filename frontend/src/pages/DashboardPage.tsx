@@ -1,6 +1,6 @@
 import { ArrowRight, BookOpenText, FileText, Lightbulb, Plus, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import type { Project } from '../types'
@@ -10,7 +10,6 @@ const dateFormat = new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'nume
 
 export function DashboardPage() {
   const { user } = useAuth()
-  const navigate = useNavigate()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -126,24 +125,7 @@ export function DashboardPage() {
         ) : (
           <div className="project-list">
             {recentProjects.map(project => (
-              <article
-                className="project-row project-row-clickable"
-                key={project.id}
-                role="link"
-                tabIndex={0}
-                aria-label={`查看${project.projectname || '未命名作品'}详情`}
-                onClick={event => {
-                  if ((event.target as HTMLElement).closest('a, button')) return
-                  navigate(`/projects/${project.id}`)
-                }}
-                onKeyDown={event => {
-                  if (event.target !== event.currentTarget) return
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    navigate(`/projects/${project.id}`)
-                  }
-                }}
-              >
+              <article className="project-row dashboard-project-row" key={project.id}>
                 <span className="book-spine" aria-hidden="true" />
                 <div className="project-main">
                   <h3>
@@ -151,18 +133,11 @@ export function DashboardPage() {
                       {project.projectname || '未命名作品'}
                     </Link>
                   </h3>
-                  <p>{project.introduction || '尚未填写作品简介'}</p>
-                </div>
-                <div className="project-meta">
-                  <span>{project.chapter_count} 章</span>
-                  <span>{numberFormat.format(project.total_words)} 字</span>
                 </div>
                 <time dateTime={project.updated_at}>{dateFormat.format(new Date(project.updated_at))}</time>
-                <span
-                  className={`status-badge ${project.status === '完结' ? 'done' : project.status === '断更' ? 'paused' : ''}`}
-                >
-                  {project.status}
-                </span>
+                <Link className="text-link dashboard-continue-link" to={`/projects/${project.id}`}>
+                  继续创作 <ArrowRight size={15} />
+                </Link>
               </article>
             ))}
           </div>

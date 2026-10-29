@@ -12,6 +12,9 @@ class ProjectRequest(BaseModel):
     expected_words: Optional[int] = Field(None, gt=0, le=10000000, description="期望作品字数")
     status: Optional[Literal["连载中", "完结", "断更"]] = Field(None, description="作品状态")
 class ProjectInfoBase(ProjectRequest):
+    # Response validation must accept legacy auto-generated one-character
+    # project names (for example, a database ID of "4").
+    projectname: Optional[str] = Field(None, max_length=50, description="小说名称")
     id: int
     expected_words: Optional[int] = None
     total_words: int = 0
@@ -19,6 +22,7 @@ class ProjectInfoBase(ProjectRequest):
     created_at: datetime
     updated_at: datetime
     status: Optional[str] = None
+    current_state_markdown: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -26,8 +30,19 @@ class ProjectUpdateRequest(ProjectRequest):
     pass
 
 
+class ProjectStateRequest(BaseModel):
+    current_state_markdown: str = Field(..., min_length=1, max_length=20000)
+
+
+class ProjectStateInfo(BaseModel):
+    project_id: int
+    current_state_markdown: str
+    updated_at: datetime
+
+
 class OutlineRequest(BaseModel):
     outline: Optional[str] = Field(None, max_length=100000, description="作品大纲")
+    expected_words: Optional[int] = Field(None, gt=0, le=10000000, description="期望作品字数")
 
 
 class OutlineInfo(BaseModel):
@@ -35,11 +50,56 @@ class OutlineInfo(BaseModel):
     outline: Optional[str] = None
 
 
+class OutlineVolumeRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    volume_number: Optional[int] = Field(None, gt=0)
+    expected_words: Optional[int] = Field(None, gt=0, le=10000000)
+    start_chapter: Optional[int] = Field(None, gt=0)
+    end_chapter: Optional[int] = Field(None, gt=0)
+    outline: Optional[str] = Field(None, max_length=100000)
+
+
+class OutlineVolumeInfo(OutlineVolumeRequest):
+    id: int
+    project_id: int
+    volume_number: int
+    created_at: datetime
+    updated_at: datetime
+    is_deleted: bool = False
+    is_completed: bool = False
+    completion_note: Optional[str] = None
+    completed_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RecycledOutlineVolumeInfo(OutlineVolumeInfo):
+    projectname: Optional[str] = None
+    project_status: Optional[str] = None
+
+
 class OutlineVersionInfo(BaseModel):
     id: int
     project_id: int
     version_number: int
     source: str
+    outline: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OutlineVolumeVersionInfo(BaseModel):
+    id: int
+    project_id: int
+    volume_id: int
+    version_number: int
+    source: str
+    volume_number: int
+    name: str
+    expected_words: int
+    start_chapter: Optional[int] = None
+    end_chapter: Optional[int] = None
     outline: Optional[str] = None
     created_at: datetime
 
@@ -68,6 +128,9 @@ class ChapterRequest(BaseModel):
     plan: Optional[ChapterPlan] = Field(None, description="章节规划")
     summary: Optional[str] = Field(None, max_length=20000, description="章节摘要")
     memory: Optional[ChapterMemory] = Field(None, description="章节记忆")
+    volume_id: Optional[int] = Field(None, gt=0, description="所属卷纲ID")
+    volume_complete: Optional[bool] = Field(None, description="确认细纲已完成所属卷目标")
+    volume_completion_note: Optional[str] = Field(None, max_length=2000)
 
 
 class ChapterInfo(BaseModel):
@@ -82,6 +145,8 @@ class ChapterInfo(BaseModel):
     created_at: datetime
     updated_at: datetime
     is_deleted: bool = False
+    volume_id: Optional[int] = None
+    word_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -98,6 +163,7 @@ class ChapterVersionInfo(BaseModel):
     summary: Optional[str] = None
     memory: Optional[ChapterMemory] = None
     created_at: datetime
+    volume_id: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 

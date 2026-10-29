@@ -11,6 +11,9 @@ import type {
   KnowledgeCitation,
   Inspiration,
   OutlineVersion,
+  OutlineVolumeVersion,
+  OutlineVolume,
+  RecycledOutlineVolume,
   ProfilePayload,
   Project,
   RecycledChapter,
@@ -113,6 +116,62 @@ async function streamChapterContent(
   return { content, meta }
 }
 
+async function streamProjectOutline(
+  projectId: number,
+  expectedWords: number,
+  userIdea = '',
+  knowledgeBaseIds: number[] = [],
+  inspirationIds: number[] = [],
+  onChunk?: (chunk: string) => void,
+): Promise<{ project_id: number; expected_words: number; citations?: KnowledgeCitation[] }> {
+  const token = localStorage.getItem(TOKEN_KEY)
+  const headers = new Headers({ 'Content-Type': 'application/json' })
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  let response: Response
+  try {
+    response = await fetch(`/api/agent/projects/${projectId}/outline/stream`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        expected_words: expectedWords,
+        user_idea: userIdea,
+        inspiration_ids: inspirationIds,
+        knowledge_base_ids: knowledgeBaseIds,
+      }),
+      credentials: 'include',
+    })
+  } catch {
+    throw new ApiError('无法连接服务器，请确认后端服务已启动')
+  }
+  if (!response.ok || !response.body) {
+    const payload = await response.json().catch(() => null)
+    throw new ApiError(errorMessage(payload), response.status)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let meta: { project_id: number; expected_words: number; citations?: KnowledgeCitation[] } | null = null
+  const consume = (block: string) => {
+    const line = block.split('\n').find(item => item.startsWith('data:'))
+    if (!line) return
+    const event = JSON.parse(line.slice(5).trim()) as { event: string; data: unknown }
+    if (event.event === 'chunk') onChunk?.(String(event.data))
+    else if (event.event === 'done') meta = event.data as typeof meta
+    else if (event.event === 'error') throw new ApiError(String(event.data))
+  }
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop() || ''
+    blocks.forEach(consume)
+    if (done) break
+  }
+  if (buffer.trim()) consume(buffer)
+  if (!meta) throw new ApiError('大纲生成未完成，请稍后重试')
+  return meta
+}
+
 export const tokenStore = {
   key: TOKEN_KEY,
   get: () => localStorage.getItem(TOKEN_KEY),
@@ -178,8 +237,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ data_url: dataUrl, filename }),
     }),
-  generateProjectCover: (projectId: number) =>
-    request<Project>(`/api/agent/projects/${projectId}/cover`, { method: 'POST' }),
+  generateProjectCover: (projectId: number, authorName: string) =>
+    request<Project>(`/api/agent/projects/${projectId}/cover`, {
+      method: 'POST',
+      body: JSON.stringify({ author_name: authorName }),
+    }),
   getProjectMemories: (projectId: number) => request<StoryMemoryEntry[]>(`/api/project/${projectId}/memories`),
   getProjectMemoryConflicts: (projectId: number) =>
     request<StoryMemoryConflict[]>(`/api/project/${projectId}/memories/conflicts`),
@@ -236,19 +298,86 @@ export const api = {
   getProjectChapters: (projectId: number) => request<Chapter[]>(`/api/project/${projectId}/chapters`),
   getProjectOutline: (projectId: number) =>
     request<{ project_id: number; outline: string | null }>(`/api/project/${projectId}/outline`),
-  updateProjectOutline: (projectId: number, outline: string) =>
+  updateProjectOutline: (projectId: number, outline: string, expectedWords?: number) =>
     request<{ project_id: number; outline: string | null }>(`/api/project/${projectId}/outline`, {
       method: 'PUT',
-      body: JSON.stringify({ outline }),
+      body: JSON.stringify({ outline, ...(expectedWords === undefined ? {} : { expected_words: expectedWords }) }),
     }),
   getOutlineVersions: (projectId: number, limit = 50) =>
     request<OutlineVersion[]>(`/api/project/${projectId}/outline/versions?limit=${limit}`),
+  getOutlineVolumeVersions: (projectId: number, limit = 100) =>
+    request<OutlineVolumeVersion[]>(`/api/project/${projectId}/outline/volume-versions?limit=${limit}`),
+  restoreOutlineVolumeVersion: (projectId: number, versionId: number) =>
+    request<OutlineVolume>(`/api/project/${projectId}/outline/volume-versions/${versionId}/restore`, {
+      method: 'POST',
+    }),
+  getRollingOutlineVersions: (projectId: number, limit = 100) =>
+    request<ChapterVersion[]>(`/api/project/${projectId}/outline/rolling-versions?limit=${limit}`),
+  restoreRollingOutlineVersion: (projectId: number, versionId: number) =>
+    request<Chapter>(`/api/project/${projectId}/outline/rolling-versions/${versionId}/restore`, { method: 'POST' }),
+  getOutlineVolumes: (projectId: number) => request<OutlineVolume[]>(`/api/project/${projectId}/outline/volumes`),
+  createOutlineVolume: (
+    projectId: number,
+    payload: Pick<OutlineVolume, 'name' | 'outline'> & {
+      volume_number?: number
+    },
+  ) =>
+    request<OutlineVolume>(`/api/project/${projectId}/outline/volumes`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateOutlineVolume: (
+    projectId: number,
+    volumeId: number,
+    payload: Pick<OutlineVolume, 'name' | 'outline'> & {
+      volume_number?: number
+    },
+  ) =>
+    request<OutlineVolume>(`/api/project/${projectId}/outline/volumes/${volumeId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  deleteOutlineVolume: (projectId: number, volumeId: number) =>
+    request<{ id: number }>(`/api/project/${projectId}/outline/volumes/${volumeId}`, { method: 'DELETE' }),
+  generateOutlineVolume: (projectId: number, volumeId: number, userIdea = '', knowledgeBaseIds: number[] = []) =>
+    request<{ project_id: number; volume_id: number; outline: string; citations?: KnowledgeCitation[] }>(
+      `/api/agent/projects/${projectId}/outline/volumes/${volumeId}/generate`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ user_idea: userIdea, knowledge_base_ids: knowledgeBaseIds }),
+      },
+    ),
+  generateOutlineVolumePlan: (
+    projectId: number,
+    expectedWords: number,
+    replaceExisting = false,
+    knowledgeBaseIds: number[] = [],
+  ) =>
+    request<{
+      project_id: number
+      expected_words: number
+      volumes: OutlineVolume[]
+      citations?: KnowledgeCitation[]
+    }>(`/api/agent/projects/${projectId}/outline/volumes/generate-plan`, {
+      method: 'POST',
+      body: JSON.stringify({
+        expected_words: expectedWords,
+        replace_existing: replaceExisting,
+        knowledge_base_ids: knowledgeBaseIds,
+      }),
+    }),
   restoreOutlineVersion: (projectId: number, versionId: number) =>
     request<{ project_id: number; outline: string | null }>(
       `/api/project/${projectId}/outline/versions/${versionId}/restore`,
       { method: 'POST' },
     ),
-  generateProjectOutline: (projectId: number, expectedWords: number, userIdea = '', knowledgeBaseIds: number[] = []) =>
+  generateProjectOutline: (
+    projectId: number,
+    expectedWords: number,
+    userIdea = '',
+    knowledgeBaseIds: number[] = [],
+    inspirationIds: number[] = [],
+  ) =>
     request<{ project_id: number; expected_words: number; outline: string; citations?: KnowledgeCitation[] }>(
       `/api/agent/projects/${projectId}/outline`,
       {
@@ -256,10 +385,19 @@ export const api = {
         body: JSON.stringify({
           expected_words: expectedWords,
           user_idea: userIdea,
+          inspiration_ids: inspirationIds,
           knowledge_base_ids: knowledgeBaseIds,
         }),
       },
     ),
+  generateProjectOutlineStream: (
+    projectId: number,
+    expectedWords: number,
+    userIdea = '',
+    knowledgeBaseIds: number[] = [],
+    inspirationIds: number[] = [],
+    onChunk?: (chunk: string) => void,
+  ) => streamProjectOutline(projectId, expectedWords, userIdea, knowledgeBaseIds, inspirationIds, onChunk),
   generateChapterPlan: (
     projectId: number,
     chapterId: number,
@@ -267,17 +405,47 @@ export const api = {
     userIdea = '',
     knowledgeBaseIds: number[] = [],
   ) =>
-    request<{ project_id: number; chapter_id: number; plan: ChapterPlan; citations?: KnowledgeCitation[] }>(
-      `/api/agent/projects/${projectId}/chapters/${chapterId}/plan`,
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          expected_words: expectedWords,
-          user_idea: userIdea,
-          knowledge_base_ids: knowledgeBaseIds,
-        }),
-      },
-    ),
+    request<{
+      project_id: number
+      chapter_id: number
+      plan: ChapterPlan
+      citations?: KnowledgeCitation[]
+      volume_id?: number | null
+      volume_complete?: boolean
+      volume_completion_note?: string | null
+    }>(`/api/agent/projects/${projectId}/chapters/${chapterId}/plan`, {
+      method: 'POST',
+      body: JSON.stringify({
+        expected_words: expectedWords,
+        user_idea: userIdea,
+        knowledge_base_ids: knowledgeBaseIds,
+      }),
+    }),
+  generateRollingChapterPlans: (
+    projectId: number,
+    chapterIds: number[],
+    expectedWords = 3000,
+    userIdea = '',
+    knowledgeBaseIds: number[] = [],
+    chapterNumbers: number[] = [],
+  ) =>
+    request<{
+      project_id: number
+      plans: Array<{ chapter_id: number; chapter_number: number; chapter_name: string; plan: ChapterPlan }>
+      citations?: KnowledgeCitation[]
+      volume_id?: number | null
+      volume_complete?: boolean
+      volume_completion_note?: string | null
+    }>(`/api/agent/projects/${projectId}/chapters/rolling-plan`, {
+      method: 'POST',
+      body: JSON.stringify({
+        chapter_ids: chapterIds,
+        chapter_numbers: chapterNumbers,
+        expected_words: expectedWords,
+        user_idea: userIdea,
+        knowledge_base_ids: knowledgeBaseIds,
+      }),
+    }),
   generateChapterContent: (
     projectId: number,
     chapterId: number,
@@ -385,11 +553,19 @@ export const api = {
       introduction: string
       project_type: string
       cover_url: string | null
+      expected_words?: number
       status: '连载中' | '完结' | '断更'
     },
   ) => request<Project>(`/api/project/${projectId}`, { method: 'PUT', body: JSON.stringify(payload) }),
-  createChapter: (projectId: number, payload: { chapter_number: number; chaptername: string; content?: string }) =>
-    request<Chapter>(`/api/project/${projectId}/chapters`, { method: 'POST', body: JSON.stringify(payload) }),
+  updateProjectState: (projectId: number, currentStateMarkdown: string) =>
+    request<{ project_id: number; current_state_markdown: string; updated_at: string }>(
+      `/api/project/${projectId}/state`,
+      { method: 'PUT', body: JSON.stringify({ current_state_markdown: currentStateMarkdown }) },
+    ),
+  createChapter: (
+    projectId: number,
+    payload: { chapter_number: number; chaptername: string; content?: string; volume_id?: number | null },
+  ) => request<Chapter>(`/api/project/${projectId}/chapters`, { method: 'POST', body: JSON.stringify(payload) }),
   updateChapter: (
     projectId: number,
     chapterId: number,
@@ -397,6 +573,9 @@ export const api = {
       chapter_number: number
       chaptername: string
       content?: string
+      volume_id?: number | null
+      volume_complete?: boolean
+      volume_completion_note?: string | null
       plan?: ChapterPlan | null
       summary?: string | null
       memory?: ChapterMemory | null
@@ -413,9 +592,20 @@ export const api = {
       method: 'POST',
     }),
   getRecycledProjects: () => request<Project[]>('/api/recycle-bin/projects'),
+  permanentlyDeleteAllProjects: () =>
+    request<{ deleted_count: number }>('/api/recycle-bin/projects/clear', { method: 'DELETE' }),
   getRecycledChapters: () => request<RecycledChapter[]>('/api/recycle-bin/chapters'),
+  permanentlyDeleteAllChapters: () =>
+    request<{ deleted_count: number }>('/api/recycle-bin/chapters/clear', { method: 'DELETE' }),
+  getRecycledOutlineVolumes: () => request<RecycledOutlineVolume[]>('/api/recycle-bin/outline-volumes'),
+  permanentlyDeleteAllOutlineVolumes: () =>
+    request<{ deleted_count: number }>('/api/recycle-bin/outline-volumes/clear', { method: 'DELETE' }),
   getRecycledKnowledgeBases: () => request<KnowledgeBase[]>('/api/recycle-bin/knowledge-bases'),
+  permanentlyDeleteAllKnowledgeBases: () =>
+    request<{ deleted_count: number }>('/api/recycle-bin/knowledge-bases/clear', { method: 'DELETE' }),
   getRecycledInspirations: () => request<Inspiration[]>('/api/recycle-bin/inspirations'),
+  permanentlyDeleteAllInspirations: () =>
+    request<{ deleted_count: number }>('/api/recycle-bin/inspirations/clear', { method: 'DELETE' }),
   recycleProject: (projectId: number) =>
     request<Project>(`/api/recycle-bin/projects/${projectId}/trash`, { method: 'POST' }),
   restoreProject: (projectId: number) =>
@@ -428,6 +618,10 @@ export const api = {
     request<Chapter>(`/api/recycle-bin/chapters/${chapterId}/restore`, { method: 'PUT' }),
   permanentlyDeleteChapter: (chapterId: number) =>
     request<null>(`/api/recycle-bin/chapters/${chapterId}`, { method: 'DELETE' }),
+  restoreOutlineVolume: (volumeId: number) =>
+    request<RecycledOutlineVolume>(`/api/recycle-bin/outline-volumes/${volumeId}/restore`, { method: 'PUT' }),
+  permanentlyDeleteOutlineVolume: (volumeId: number) =>
+    request<null>(`/api/recycle-bin/outline-volumes/${volumeId}`, { method: 'DELETE' }),
   restoreKnowledgeBase: (baseId: number) =>
     request<KnowledgeBase>(`/api/recycle-bin/knowledge-bases/${baseId}/restore`, { method: 'PUT' }),
   permanentlyDeleteKnowledgeBase: (baseId: number) =>
@@ -436,20 +630,10 @@ export const api = {
     request<Inspiration>(`/api/recycle-bin/inspirations/${id}/restore`, { method: 'PUT' }),
   permanentlyDeleteInspiration: (id: number) =>
     request<null>(`/api/recycle-bin/inspirations/${id}`, { method: 'DELETE' }),
-  createProject: (projectname: string, introduction: string, project_type: string) =>
+  createProject: (project_type: string) =>
     request<Project>('/api/project/newProject', {
       method: 'POST',
-      body: JSON.stringify({ projectname, introduction, project_type }),
-    }),
-  generateProjectField: (payload: {
-    field: 'projectname' | 'introduction' | 'project_type'
-    projectname?: string
-    introduction?: string
-    project_type?: string
-  }) =>
-    request<{ field: string; value: string }>('/api/agent/project-field', {
-      method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ project_type }),
     }),
   refineIdea: (idea: string) =>
     request<{ idea: string; refined_idea: string }>('/api/agent/refine-idea', {

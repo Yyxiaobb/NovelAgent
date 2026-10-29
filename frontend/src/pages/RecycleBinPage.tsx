@@ -1,4 +1,4 @@
-import { ArrowLeft, CalendarDays, FileText, Lightbulb, RotateCcw, Search, Trash2 } from 'lucide-react'
+import { ArrowLeft, CalendarDays, FileText, Lightbulb, RotateCcw, Search, Trash2, ScrollText } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client'
@@ -6,14 +6,16 @@ import { ChapterActionDialog, type ChapterAction } from '../components/ChapterAc
 import { KnowledgeBaseActionDialog, type KnowledgeBaseAction } from '../components/KnowledgeBaseActionDialog'
 import { InspirationActionDialog, type InspirationAction } from '../components/InspirationActionDialog'
 import { ProjectActionDialog, type ProjectAction } from '../components/ProjectActionDialog'
-import type { Chapter, Inspiration, KnowledgeBase, Project, RecycledChapter } from '../types'
+import { OutlineVolumeActionDialog, type OutlineVolumeAction } from '../components/OutlineVolumeActionDialog'
+import type { Chapter, Inspiration, KnowledgeBase, Project, RecycledChapter, RecycledOutlineVolume } from '../types'
 
 const numberFormat = new Intl.NumberFormat('zh-CN')
 const dateFormat = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
-type Tab = 'projects' | 'chapters' | 'knowledge' | 'inspirations'
+type Tab = 'projects' | 'chapters' | 'volumes' | 'knowledge' | 'inspirations'
 type Selection =
   | { kind: 'project'; item: Project; action: ProjectAction }
   | { kind: 'chapter'; item: RecycledChapter; action: ChapterAction }
+  | { kind: 'volume'; item: RecycledOutlineVolume; action: OutlineVolumeAction }
   | { kind: 'knowledge'; item: KnowledgeBase; action: KnowledgeBaseAction }
   | { kind: 'inspiration'; item: Inspiration; action: InspirationAction }
 
@@ -24,6 +26,7 @@ function chapterTitle(chapter: Chapter) {
 export function RecycleBinPage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [chapters, setChapters] = useState<RecycledChapter[]>([])
+  const [volumes, setVolumes] = useState<RecycledOutlineVolume[]>([])
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
   const [inspirations, setInspirations] = useState<Inspiration[]>([])
   const [tab, setTab] = useState<Tab>('projects')
@@ -32,6 +35,7 @@ export function RecycleBinPage() {
   const [query, setQuery] = useState('')
   const [notice, setNotice] = useState('')
   const [selection, setSelection] = useState<Selection | null>(null)
+  const [clearing, setClearing] = useState(false)
 
   const loadRecycleBin = useCallback(() => {
     setLoading(true)
@@ -39,12 +43,14 @@ export function RecycleBinPage() {
     Promise.all([
       api.getRecycledProjects(),
       api.getRecycledChapters(),
+      api.getRecycledOutlineVolumes?.() ?? Promise.resolve([]),
       api.getRecycledKnowledgeBases?.() ?? Promise.resolve([]),
       api.getRecycledInspirations?.() ?? Promise.resolve([]),
     ])
-      .then(([projectList, chapterList, knowledgeList, inspirationList]) => {
+      .then(([projectList, chapterList, volumeList, knowledgeList, inspirationList]) => {
         setProjects(projectList)
         setChapters(chapterList)
+        setVolumes(volumeList)
         setKnowledgeBases(knowledgeList)
         setInspirations(inspirationList)
       })
@@ -73,6 +79,13 @@ export function RecycleBinPage() {
     return knowledgeBases.filter(base => `${base.name} ${base.description || ''}`.toLowerCase().includes(keyword))
   }, [knowledgeBases, query])
 
+  const filteredVolumes = useMemo(() => {
+    const keyword = query.trim().toLowerCase()
+    return volumes.filter(volume =>
+      `${volume.name} ${volume.outline || ''} ${volume.projectname || ''}`.toLowerCase().includes(keyword),
+    )
+  }, [volumes, query])
+
   const filteredInspirations = useMemo(() => {
     const keyword = query.trim().toLowerCase()
     return inspirations.filter(item =>
@@ -88,6 +101,11 @@ export function RecycleBinPage() {
   function selectChapterAction(chapter: RecycledChapter, action: ChapterAction) {
     setNotice('')
     setSelection({ kind: 'chapter', item: chapter, action })
+  }
+
+  function selectVolumeAction(volume: RecycledOutlineVolume, action: OutlineVolumeAction) {
+    setNotice('')
+    setSelection({ kind: 'volume', item: volume, action })
   }
 
   function selectKnowledgeBaseAction(knowledgeBase: KnowledgeBase, action: KnowledgeBaseAction) {
@@ -107,6 +125,11 @@ export function RecycleBinPage() {
       action === 'delete'
         ? current.filter(chapter => chapter.project_id !== project.id)
         : current.map(chapter => (chapter.project_id === project.id ? { ...chapter, project_status: null } : chapter)),
+    )
+    setVolumes(current =>
+      action === 'delete'
+        ? current.filter(volume => volume.project_id !== project.id)
+        : current.map(volume => (volume.project_id === project.id ? { ...volume, project_status: null } : volume)),
     )
     setNotice(
       `《${project.projectname || '未命名作品'}》已${action === 'restore' ? '还原，可在作品列表中继续查看' : '彻底删除'}。`,
@@ -137,12 +160,21 @@ export function RecycleBinPage() {
     setSelection(null)
   }
 
+  function handleVolumeSuccess(volume: RecycledOutlineVolume) {
+    setVolumes(current => current.filter(item => item.id !== volume.id))
+    const action = selection?.kind === 'volume' ? selection.action : 'restore'
+    setNotice(`“${volume.name}”已${action === 'restore' ? '还原' : '彻底删除'}。`)
+    setSelection(null)
+  }
+
   const visibleCount =
     tab === 'projects'
       ? filteredProjects.length
       : tab === 'chapters'
         ? filteredChapters.length
-        : tab === 'knowledge'
+        : tab === 'volumes'
+          ? filteredVolumes.length
+          : tab === 'knowledge'
           ? filteredKnowledgeBases.length
           : filteredInspirations.length
 
@@ -157,12 +189,61 @@ export function RecycleBinPage() {
           : tab === 'projects'
             ? 'chapters'
             : tab === 'chapters'
-              ? 'knowledge'
-              : tab === 'knowledge'
-                ? 'inspirations'
-                : 'projects'
+              ? 'volumes'
+              : tab === 'volumes'
+                ? 'knowledge'
+                : tab === 'knowledge'
+                  ? 'inspirations'
+                  : 'projects'
     setTab(nextTab)
     event.currentTarget.querySelector<HTMLButtonElement>(`#recycle-${nextTab}-tab`)?.focus()
+  }
+
+  const tabLabel = {
+    projects: '作品',
+    chapters: '章节',
+    volumes: '卷纲',
+    knowledge: '知识库',
+    inspirations: '灵感',
+  }[tab]
+
+  const currentCount = {
+    projects: projects.length,
+    chapters: chapters.length,
+    volumes: volumes.length,
+    knowledge: knowledgeBases.length,
+    inspirations: inspirations.length,
+  }[tab]
+
+  async function clearCurrentType() {
+    if (currentCount === 0 || clearing) return
+    if (!window.confirm(`确定彻底删除回收站中的全部${tabLabel}吗？\n\n共 ${currentCount} 项，删除后无法恢复。`)) return
+    setClearing(true)
+    setError('')
+    try {
+      if (tab === 'projects') {
+        await api.permanentlyDeleteAllProjects()
+        setProjects([])
+      } else if (tab === 'chapters') {
+        await api.permanentlyDeleteAllChapters()
+        setChapters([])
+      } else if (tab === 'volumes') {
+        await api.permanentlyDeleteAllOutlineVolumes()
+        setVolumes([])
+      } else if (tab === 'knowledge') {
+        await api.permanentlyDeleteAllKnowledgeBases()
+        setKnowledgeBases([])
+      } else {
+        await api.permanentlyDeleteAllInspirations()
+        setInspirations([])
+      }
+      setNotice(`已彻底删除全部${tabLabel}（${currentCount} 项）`)
+      setSelection(null)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : `清理${tabLabel}失败，请稍后重试`)
+    } finally {
+      setClearing(false)
+    }
   }
 
   return (
@@ -171,7 +252,7 @@ export function RecycleBinPage() {
         <div>
           <p className="eyebrow">作品管理</p>
           <h1>回收站</h1>
-          <p>还原暂别的故事和章节，或彻底删除不再需要的内容。</p>
+          <p>还原暂别的故事、章节和卷纲，或彻底删除不再需要的内容。</p>
         </div>
         <Link className="secondary-button" to="/projects">
           <ArrowLeft size={17} />
@@ -189,7 +270,13 @@ export function RecycleBinPage() {
         </div>
       )}
 
-      <div className="recycle-tabs" role="tablist" aria-label="回收站内容类型" onKeyDown={handleTabKey}>
+      <p className="eyebrow recycle-filter-label">按内容类型筛选</p>
+      <div
+        className="recycle-tabs"
+        role="tablist"
+        aria-label="按内容类型筛选回收站"
+        onKeyDown={handleTabKey}
+      >
         <button
           id="recycle-projects-tab"
           role="tab"
@@ -211,6 +298,17 @@ export function RecycleBinPage() {
           onClick={() => setTab('chapters')}
         >
           章节 <span>{chapters.length}</span>
+        </button>
+        <button
+          id="recycle-volumes-tab"
+          role="tab"
+          aria-selected={tab === 'volumes'}
+          tabIndex={tab === 'volumes' ? 0 : -1}
+          aria-controls="recycle-content"
+          className={tab === 'volumes' ? 'active' : ''}
+          onClick={() => setTab('volumes')}
+        >
+          卷纲 <span>{volumes.length}</span>
         </button>
         <button
           id="recycle-knowledge-tab"
@@ -247,9 +345,11 @@ export function RecycleBinPage() {
                 ? '搜索回收站中的作品'
                 : tab === 'chapters'
                   ? '搜索章节名或所属作品'
-                  : tab === 'knowledge'
-                    ? '搜索知识库名称或描述'
-                    : '搜索灵感标题或内容'
+                  : tab === 'volumes'
+                    ? '搜索卷名、卷纲或所属作品'
+                    : tab === 'knowledge'
+                      ? '搜索知识库名称或描述'
+                      : '搜索灵感标题或内容'
             }
             aria-label="搜索回收站"
           />
@@ -373,6 +473,54 @@ export function RecycleBinPage() {
               ))}
             </div>
           )
+        ) : tab === 'volumes' ? (
+          filteredVolumes.length === 0 ? (
+            <div className="empty-state">
+              <ScrollText size={32} />
+              <h3>{query.trim() ? '没有匹配的卷纲' : '没有已删除的卷纲'}</h3>
+              <p>{query.trim() ? '换一个卷名、作品名或关键词试试。' : '从作品大纲中移入回收站的卷纲会显示在这里。'}</p>
+            </div>
+          ) : (
+            <div className="recycled-chapter-list">
+              {filteredVolumes.map(volume => (
+                <article className="recycled-chapter-row" key={volume.id}>
+                  <span className="chapter-number">卷{String(volume.volume_number).padStart(2, '0')}</span>
+                  <div className="recycled-chapter-copy">
+                    <h2>{volume.name}</h2>
+                    <p>所属作品：{volume.projectname || '未命名作品'}</p>
+                    <p>{volume.outline || '尚未填写卷纲内容'}</p>
+                    {volume.project_status === '回收站' && <p className="error-copy">请先还原所属作品</p>}
+                  </div>
+                  <span className="project-updated">
+                    <CalendarDays size={14} />
+                    移入于 {dateFormat.format(new Date(volume.updated_at))}
+                  </span>
+                  <div className="project-card-actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => selectVolumeAction(volume, 'restore')}
+                      aria-label={`还原${volume.name}`}
+                      disabled={volume.project_status === '回收站'}
+                      title={volume.project_status === '回收站' ? '请先还原所属作品' : undefined}
+                    >
+                      <RotateCcw size={15} />
+                      还原
+                    </button>
+                    <button
+                      className="secondary-button danger-button"
+                      type="button"
+                      onClick={() => selectVolumeAction(volume, 'delete')}
+                      aria-label={`彻底删除${volume.name}`}
+                    >
+                      <Trash2 size={15} />
+                      彻底删除
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )
         ) : tab === 'knowledge' ? (
           filteredKnowledgeBases.length === 0 ? (
             <div className="empty-state">
@@ -467,6 +615,19 @@ export function RecycleBinPage() {
         )}
       </div>
 
+      <div className="recycle-clear-footer">
+        <button
+          className="secondary-button danger-button"
+          type="button"
+          onClick={() => void clearCurrentType()}
+          disabled={clearing || currentCount === 0}
+          aria-label={`一键清理${tabLabel}`}
+        >
+          <Trash2 size={15} />
+          {clearing ? '正在清理…' : `一键清理${tabLabel}`}
+        </button>
+      </div>
+
       <ProjectActionDialog
         project={selection?.kind === 'project' ? selection.item : null}
         action={selection?.kind === 'project' ? selection.action : 'restore'}
@@ -490,6 +651,12 @@ export function RecycleBinPage() {
         action={selection?.kind === 'inspiration' ? selection.action : 'restore'}
         onClose={() => setSelection(null)}
         onSuccess={handleInspirationSuccess}
+      />
+      <OutlineVolumeActionDialog
+        volume={selection?.kind === 'volume' ? selection.item : null}
+        action={selection?.kind === 'volume' ? selection.action : 'restore'}
+        onClose={() => setSelection(null)}
+        onSuccess={handleVolumeSuccess}
       />
     </div>
   )

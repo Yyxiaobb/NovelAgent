@@ -8,7 +8,7 @@ import { DashboardPage } from './DashboardPage'
 import { ProjectsPage } from './ProjectsPage'
 
 vi.mock('../api/client', () => ({
-  api: { getProjects: vi.fn(), createProject: vi.fn(), generateProjectField: vi.fn() },
+  api: { getProjects: vi.fn(), createProject: vi.fn() },
 }))
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: { username: 'writer', nickname: '创作者' }, logout: vi.fn() }),
@@ -17,7 +17,6 @@ vi.mock('../auth/AuthContext', () => ({
 beforeEach(() => {
   vi.mocked(api.getProjects).mockReset().mockResolvedValue([])
   vi.mocked(api.createProject).mockReset()
-  vi.mocked(api.generateProjectField).mockReset()
   localStorage.clear()
 })
 afterEach(cleanup)
@@ -53,11 +52,7 @@ describe('新建作品入口', () => {
     expect(screen.getByRole('button', { name: '创建作品' })).toBeTruthy()
   })
 
-  it('弹窗提供名称、简介和类型的智能生成按钮', async () => {
-    vi.mocked(api.generateProjectField).mockImplementation(async ({ field }) => ({
-      field,
-      value: field === 'projectname' ? '星河归途' : field === 'introduction' ? '一段由智能体生成的故事简介。' : '科幻',
-    }))
+  it('弹窗仅保留作品类型选择，不显示智能生成和草稿功能', async () => {
     render(
       <MemoryRouter initialEntries={['/?create=1']}>
         <Routes>
@@ -69,77 +64,42 @@ describe('新建作品入口', () => {
     )
 
     const dialog = await screen.findByRole('dialog', { name: '新建作品' })
-    expect(within(dialog).getByLabelText('智能生成作品名称')).toBeTruthy()
-    expect(within(dialog).getByLabelText('智能生成作品简介')).toBeTruthy()
-    expect(within(dialog).getByLabelText('智能生成作品类型')).toBeTruthy()
-
-    await userEvent.click(within(dialog).getByLabelText('智能生成作品名称'))
-    await userEvent.click(within(dialog).getByLabelText('智能生成作品简介'))
-    await userEvent.click(within(dialog).getByLabelText('智能生成作品类型'))
-
-    expect(await within(dialog).findByDisplayValue('星河归途')).toBeTruthy()
-    expect(within(dialog).getByDisplayValue('一段由智能体生成的故事简介。')).toBeTruthy()
-    expect(within(dialog).getByDisplayValue('科幻')).toBeTruthy()
-    expect(api.generateProjectField).toHaveBeenCalledTimes(3)
+    expect(within(dialog).getByRole('combobox', { name: '作品类型' })).toBeTruthy()
+    expect(dialog.querySelectorAll('label.field')).toHaveLength(1)
+    expect(within(dialog).queryByLabelText('智能生成作品名称')).toBeNull()
+    expect(within(dialog).queryByLabelText('智能生成作品简介')).toBeNull()
+    expect(within(dialog).queryByLabelText('智能生成作品类型')).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: '保存草稿' })).toBeNull()
   })
 
-  it('将作品类型放在作品简介上方', async () => {
-    render(
-      <MemoryRouter initialEntries={['/?create=1']}>
-        <Routes>
-          <Route element={<AppShell />}>
-            <Route index element={<DashboardPage />} />
-          </Route>
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    const dialog = await screen.findByRole('dialog', { name: '新建作品' })
-    const fields = Array.from(dialog.querySelectorAll('label.field')).map(
-      field => field.querySelector(':scope > span:first-child')?.textContent,
-    )
-    expect(fields).toEqual(['作品名称', '作品类型', '作品简介'])
-  })
-
-  it('保存草稿后再次打开会自动恢复，并显示保存状态', async () => {
-    const { unmount } = render(
-      <MemoryRouter initialEntries={['/?create=1']}>
-        <Routes>
-          <Route element={<AppShell />}>
-            <Route index element={<DashboardPage />} />
-          </Route>
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    let dialog = await screen.findByRole('dialog', { name: '新建作品' })
-    await userEvent.type(within(dialog).getByPlaceholderText('例如：雾港来信'), '星河归途')
-    await userEvent.selectOptions(within(dialog).getByRole('combobox'), '科幻')
-    await userEvent.type(
-      within(dialog).getByPlaceholderText('简要描述故事背景、主角或核心冲突'),
-      '一支探险队在深空寻找失落的家园。',
-    )
-    await userEvent.click(within(dialog).getByRole('button', { name: '保存草稿' }))
-    expect((await within(dialog).findByRole('status')).textContent).toContain('草稿已保存')
-    expect(JSON.parse(localStorage.getItem('novel-agent-project-draft:anonymous') || '{}')).toEqual({
-      name: '星河归途',
-      projectType: '科幻',
-      introduction: '一支探险队在深空寻找失落的家园。',
+  it('创建后使用返回的作品 ID 跳转到作品详情页', async () => {
+    vi.mocked(api.createProject).mockResolvedValue({
+      id: 42,
+      projectname: '42',
+      introduction: null,
+      project_type: '科幻',
+      total_words: 0,
+      chapter_count: 0,
+      created_at: '',
+      updated_at: '',
+      status: '连载中',
     })
-
-    unmount()
     render(
       <MemoryRouter initialEntries={['/?create=1']}>
         <Routes>
           <Route element={<AppShell />}>
             <Route index element={<DashboardPage />} />
+            <Route path="projects/:projectId" element={<h1>作品详情页</h1>} />
           </Route>
         </Routes>
       </MemoryRouter>,
     )
-    dialog = await screen.findByRole('dialog', { name: '新建作品' })
-    expect(within(dialog).getByDisplayValue('星河归途')).toBeTruthy()
-    expect(within(dialog).getByDisplayValue('科幻')).toBeTruthy()
-    expect(within(dialog).getByDisplayValue('一支探险队在深空寻找失落的家园。')).toBeTruthy()
+
+    const dialog = await screen.findByRole('dialog', { name: '新建作品' })
+    await userEvent.selectOptions(within(dialog).getByRole('combobox'), '科幻')
+    await userEvent.click(within(dialog).getByRole('button', { name: '创建作品' }))
+
+    expect(api.createProject).toHaveBeenCalledWith('科幻')
+    expect(await screen.findByRole('heading', { name: '作品详情页' })).toBeTruthy()
   })
 })

@@ -19,7 +19,7 @@ import { api } from '../api/client'
 import { ChapterActionDialog } from '../components/ChapterActionDialog'
 import { Modal } from '../components/Modal'
 import { ProjectActionDialog } from '../components/ProjectActionDialog'
-import type { Chapter, Project } from '../types'
+import type { Chapter, OutlineVolume, Project } from '../types'
 
 const numberFormat = new Intl.NumberFormat('zh-CN')
 const dateFormat = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
@@ -42,6 +42,7 @@ function chapterTitle(chapter: Chapter) {
 interface ChapterDraft {
   chapter_number: number
   chaptername: string
+  volume_id?: number | null
 }
 
 export function ProjectDetailPage() {
@@ -49,16 +50,22 @@ export function ProjectDetailPage() {
   const navigate = useNavigate()
   const [project, setProject] = useState<Project | null>(null)
   const [chapters, setChapters] = useState<Chapter[]>([])
+  const [outlineVolumes, setOutlineVolumes] = useState<OutlineVolume[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [editing, setEditing] = useState(false)
   const [savingProject, setSavingProject] = useState(false)
+  const [stateDraft, setStateDraft] = useState('')
+  const [currentStateOpen, setCurrentStateOpen] = useState(false)
+  const [editingState, setEditingState] = useState(false)
+  const [savingState, setSavingState] = useState(false)
   const [projectDraft, setProjectDraft] = useState({
     name: '',
     introduction: '',
     projectType: '',
     coverUrl: '',
+    expectedWords: '1000000',
     status: '连载中' as (typeof projectStatuses)[number],
   })
   const [chapterDrafts, setChapterDrafts] = useState<Record<number, ChapterDraft>>({})
@@ -70,8 +77,17 @@ export function ProjectDetailPage() {
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [uploadingCover, setUploadingCover] = useState(false)
   const [generatingCover, setGeneratingCover] = useState(false)
+  const [coverAuthorDialogOpen, setCoverAuthorDialogOpen] = useState(false)
+  const [coverAuthorName, setCoverAuthorName] = useState('')
+  const [coverAuthorError, setCoverAuthorError] = useState('')
   const [chapterToRecycle, setChapterToRecycle] = useState<Chapter | null>(null)
   const [recycleProjectOpen, setRecycleProjectOpen] = useState(false)
+  const [expandedVolumeIds, setExpandedVolumeIds] = useState<Set<number>>(new Set())
+
+  const nextChapter = chapters.find(chapter => !(chapter.content || '').trim()) || chapters[chapters.length - 1]
+  const currentVolume =
+    outlineVolumes.find(volume => volume.id === nextChapter?.volume_id && !volume.is_completed) ||
+    outlineVolumes.find(volume => !volume.is_completed)
 
   const beginEditing = useCallback((detail: Project, chapterList: Chapter[]) => {
     setProjectDraft({
@@ -79,6 +95,7 @@ export function ProjectDetailPage() {
       introduction: detail.introduction || '',
       projectType: detail.project_type || '',
       coverUrl: detail.cover_url || '',
+      expectedWords: String(detail.expected_words || 1000000),
       status: detail.status === '完结' || detail.status === '断更' ? detail.status : '连载中',
     })
     setChapterDrafts(
@@ -88,6 +105,7 @@ export function ProjectDetailPage() {
           {
             chapter_number: chapter.chapter_number,
             chaptername: chapter.chaptername || '',
+            volume_id: chapter.volume_id,
           },
         ]),
       ),
@@ -100,9 +118,22 @@ export function ProjectDetailPage() {
     if (!Number.isInteger(id) || id <= 0) {
       throw new Error('作品编号无效')
     }
-    const [detail, chapterList] = await Promise.all([api.getProject(id), api.getProjectChapters(id)])
+    const [detail, chapterList, volumes] = await Promise.all([
+      api.getProject(id),
+      api.getProjectChapters(id),
+      api.getOutlineVolumes(id).catch(() => []),
+    ])
     setProject(detail)
     setChapters(chapterList)
+    setOutlineVolumes(volumes)
+    setStateDraft(detail.current_state_markdown || '')
+    const activeVolumeIds = new Set(volumes.map(volume => volume.id))
+    setExpandedVolumeIds(current => {
+      const next = new Set(current)
+      volumes.forEach(volume => next.add(volume.id))
+      if (chapterList.some(chapter => !chapter.volume_id || !activeVolumeIds.has(chapter.volume_id))) next.add(0)
+      return next
+    })
     beginEditing(detail, chapterList)
     return { detail, chapterList }
   }, [beginEditing, projectId])
@@ -110,6 +141,8 @@ export function ProjectDetailPage() {
   const loadDetail = useCallback(async () => {
     setLoading(true)
     setError('')
+    setCurrentStateOpen(false)
+    setEditingState(false)
     try {
       await refreshDetail()
     } catch (reason) {
@@ -135,6 +168,11 @@ export function ProjectDetailPage() {
       setNotice('作品名称至少需要 2 个字符')
       return
     }
+    const expectedWords = Number(projectDraft.expectedWords)
+    if (!Number.isInteger(expectedWords) || expectedWords <= 0 || expectedWords > 10000000) {
+      setNotice('请输入 1 到 10000000 之间的作品目标字数')
+      return
+    }
     setSavingProject(true)
     setNotice('')
     try {
@@ -143,6 +181,7 @@ export function ProjectDetailPage() {
         introduction: projectDraft.introduction.trim(),
         project_type: projectDraft.projectType,
         cover_url: projectDraft.coverUrl.trim() || null,
+        expected_words: expectedWords,
         status: projectDraft.status,
       })
       await refreshDetail()
@@ -152,6 +191,27 @@ export function ProjectDetailPage() {
       setNotice(reason instanceof Error ? reason.message : '作品信息保存失败，请稍后重试')
     } finally {
       setSavingProject(false)
+    }
+  }
+
+  async function saveCurrentState() {
+    if (!project) return
+    if (!stateDraft.trim()) {
+      setNotice('当前状态文档不能为空')
+      return
+    }
+    setSavingState(true)
+    setNotice('')
+    try {
+      const saved = await api.updateProjectState(project.id, stateDraft)
+      setProject(current => (current ? { ...current, current_state_markdown: saved.current_state_markdown } : current))
+      setStateDraft(saved.current_state_markdown)
+      setEditingState(false)
+      setNotice('当前状态文档已保存')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '当前状态保存失败，请稍后重试')
+    } finally {
+      setSavingState(false)
     }
   }
 
@@ -168,6 +228,7 @@ export function ProjectDetailPage() {
         chapter_number: draft.chapter_number,
         chaptername: draft.chaptername.trim(),
         content: chapter.content || '',
+        ...(draft.volume_id !== undefined ? { volume_id: draft.volume_id } : {}),
       })
       await refreshDetail()
       setEditingChapterIds(current => {
@@ -203,7 +264,11 @@ export function ProjectDetailPage() {
       setChapters(current => [...current, created].sort((left, right) => left.chapter_number - right.chapter_number))
       setChapterDrafts(current => ({
         ...current,
-        [created.id]: { chapter_number: created.chapter_number, chaptername: created.chaptername || '' },
+        [created.id]: {
+          chapter_number: created.chapter_number,
+          chaptername: created.chaptername || '',
+          volume_id: created.volume_id,
+        },
       }))
       setProject(current => (current ? { ...current, chapter_count: current.chapter_count + 1 } : current))
       setNewChapter(null)
@@ -213,6 +278,79 @@ export function ProjectDetailPage() {
     } finally {
       setNewChapterSaving(false)
     }
+  }
+
+  function renderChapterRow(chapter: Chapter) {
+    if (!project) return null
+    const draft = chapterDrafts[chapter.id] || {
+      chapter_number: chapter.chapter_number,
+      chaptername: chapter.chaptername || '',
+      volume_id: chapter.volume_id,
+    }
+    const chapterEditing = editingChapterIds.has(chapter.id)
+    return (
+      <article className="detail-chapter-row" key={chapter.id}>
+        <span className="chapter-number">{String(chapter.chapter_number).padStart(2, '0')}</span>
+        {chapterEditing ? (
+          <>
+            <input
+              type="number"
+              min="1"
+              value={draft.chapter_number}
+              onChange={event =>
+                setChapterDrafts(current => ({
+                  ...current,
+                  [chapter.id]: { ...draft, chapter_number: Number(event.target.value) },
+                }))
+              }
+              aria-label={`${chapterTitle(chapter)}编号`}
+            />
+            <input
+              value={draft.chaptername}
+              onChange={event =>
+                setChapterDrafts(current => ({
+                  ...current,
+                  [chapter.id]: { ...draft, chaptername: event.target.value },
+                }))
+              }
+              aria-label={`${chapterTitle(chapter)}名称`}
+            />
+            <button
+              className="secondary-button chapter-save-button"
+              type="button"
+              onClick={() => void saveChapter(chapter)}
+              disabled={chapterSaving === chapter.id}
+            >
+              <Check size={14} />
+              {chapterSaving === chapter.id ? '保存中…' : '保存章节'}
+            </button>
+          </>
+        ) : (
+          <div className="chapter-view-copy">
+            <Link to={`/projects/${project.id}/chapters/${chapter.id}`}>
+              <h3>{chapterTitle(chapter)}</h3>
+              <p>更新于 {dateFormat.format(new Date(chapter.updated_at))}</p>
+            </Link>
+          </div>
+        )}
+        <button
+          className="secondary-button chapter-edit-button"
+          type="button"
+          onClick={() => setEditingChapterIds(current => new Set(current).add(chapter.id))}
+          disabled={chapterEditing || chapterSaving !== null}
+        >
+          修改
+        </button>
+        <button
+          className="icon-button chapter-delete-button"
+          type="button"
+          aria-label={`将${chapterTitle(chapter)}移入回收站`}
+          onClick={() => setChapterToRecycle(chapter)}
+        >
+          <Trash2 size={16} />
+        </button>
+      </article>
+    )
   }
 
   async function exportProject(format: 'markdown' | 'txt') {
@@ -266,12 +404,12 @@ export function ProjectDetailPage() {
     }
   }
 
-  async function generateCover() {
+  async function generateCover(authorName: string) {
     if (!project) return
     setGeneratingCover(true)
     setNotice('正在根据作品内容生成封面…')
     try {
-      const generated = await api.generateProjectCover(project.id)
+      const generated = await api.generateProjectCover(project.id, authorName)
       setProject(generated)
       setProjectDraft(current => ({ ...current, coverUrl: generated.cover_url || '' }))
       setNotice('智能封面已生成')
@@ -280,6 +418,23 @@ export function ProjectDetailPage() {
     } finally {
       setGeneratingCover(false)
     }
+  }
+
+  function openCoverAuthorDialog() {
+    setCoverAuthorName('')
+    setCoverAuthorError('')
+    setCoverAuthorDialogOpen(true)
+  }
+
+  function confirmGenerateCover() {
+    const authorName = coverAuthorName.trim()
+    if (!authorName) {
+      setCoverAuthorError('请输入作者名')
+      return
+    }
+    setCoverAuthorError('')
+    setCoverAuthorDialogOpen(false)
+    void generateCover(authorName)
   }
 
   if (loading)
@@ -308,6 +463,13 @@ export function ProjectDetailPage() {
       </div>
     )
   }
+
+  const activeVolumeIds = new Set(outlineVolumes.map(volume => volume.id))
+  const contentWordCount = chapters.reduce(
+    (sum, chapter) => sum + (chapter.word_count ?? chapter.content?.length ?? 0),
+    0,
+  )
+  const unassignedChapters = chapters.filter(chapter => !chapter.volume_id || !activeVolumeIds.has(chapter.volume_id))
 
   return (
     <div className="page">
@@ -406,7 +568,7 @@ export function ProjectDetailPage() {
                 <button
                   className="cover-generate-button"
                   type="button"
-                  onClick={() => void generateCover()}
+                  onClick={openCoverAuthorDialog}
                   disabled={uploadingCover || generatingCover}
                 >
                   <Sparkles size={13} />
@@ -486,6 +648,17 @@ export function ProjectDetailPage() {
                   aria-label="作品简介"
                 />
               </label>
+              <label className="detail-edit-field">
+                <span>作品目标字数</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="10000000"
+                  value={projectDraft.expectedWords}
+                  onChange={event => setProjectDraft(current => ({ ...current, expectedWords: event.target.value }))}
+                  aria-label="作品目标字数"
+                />
+              </label>
             </>
           ) : (
             <>
@@ -499,9 +672,114 @@ export function ProjectDetailPage() {
               <FileText size={15} />
               {project.chapter_count} 章
             </span>
-            <span>{numberFormat.format(project.total_words)} 字</span>
+            <span>{numberFormat.format(contentWordCount)} 字</span>
           </div>
         </div>
+      </section>
+
+      <section className="creation-progress-grid" aria-label="创作进度">
+        <article className="creation-progress-card">
+          <span>正文进度</span>
+          <strong>
+            {numberFormat.format(contentWordCount)} / {numberFormat.format(project.expected_words || 1000000)} 字
+          </strong>
+          <div className="creation-progress-track">
+            <span
+              style={{
+                width: `${Math.min(100, Math.round((contentWordCount * 100) / (project.expected_words || 1000000)))}%`,
+              }}
+            />
+          </div>
+          <small>
+            {Math.min(100, (contentWordCount / (project.expected_words || 1000000)) * 100).toFixed(1)}% · 目标{' '}
+            {numberFormat.format(project.expected_words || 1000000)} 字
+          </small>
+        </article>
+        <article className="creation-progress-card">
+          <span>章节细纲</span>
+          <strong>
+            {chapters.filter(item => item.plan).length} / {chapters.length} 章
+          </strong>
+          <small>已完成章节细纲 · {chapters.filter(item => !item.content).length} 章待写正文</small>
+        </article>
+        <article className="creation-progress-card">
+          <span>创作规划</span>
+          <strong>{currentVolume?.name || (project.outline ? '总纲已建立' : '总纲待完善')}</strong>
+          <small>
+            {nextChapter
+              ? `当前推进：第${nextChapter.chapter_number}章 · ${nextChapter.chaptername || '未命名章节'}`
+              : '建立总纲后创建章节细纲'}
+          </small>
+          {nextChapter && <Link to={`/projects/${project.id}/chapters/${nextChapter.id}`}>继续当前章节</Link>}
+          <Link to={`/projects/${project.id}/outline`}>打开规划中心</Link>
+        </article>
+      </section>
+
+      <section className="content-section project-state-section">
+        {!currentStateOpen ? (
+          <button className="secondary-button" type="button" onClick={() => setCurrentStateOpen(true)}>
+            查看当前状态
+          </button>
+        ) : (
+          <>
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">故事连续性</p>
+                <h2>当前状态</h2>
+                <p>保存章节正文后，系统会在后台依据正文更新这份 Markdown 文档；完成后刷新本页查看。</p>
+              </div>
+              <div className="section-heading-actions">
+                {editingState ? (
+                  <>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => {
+                        setStateDraft(project.current_state_markdown || '')
+                        setEditingState(false)
+                      }}
+                      disabled={savingState}
+                    >
+                      <X size={15} />
+                      取消
+                    </button>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      onClick={() => void saveCurrentState()}
+                      disabled={savingState}
+                    >
+                      <Save size={15} />
+                      {savingState ? '保存中…' : '保存状态'}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="secondary-button" type="button" onClick={() => setEditingState(true)}>
+                      <Edit3 size={15} />
+                      编辑状态
+                    </button>
+                    <button className="secondary-button" type="button" onClick={() => setCurrentStateOpen(false)}>
+                      收起
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+            {editingState ? (
+              <textarea
+                className="project-state-editor"
+                value={stateDraft}
+                onChange={event => setStateDraft(event.target.value)}
+                maxLength={20000}
+                aria-label="当前状态 Markdown 文档"
+                spellCheck={false}
+              />
+            ) : (
+              <pre className="project-state-preview">{project.current_state_markdown || '当前状态文档尚未生成。'}</pre>
+            )}
+          </>
+        )}
       </section>
 
       <section className="content-section outline-management-card">
@@ -587,82 +865,60 @@ export function ProjectDetailPage() {
           </div>
         ) : (
           <div className="detail-chapter-list">
-            {chapters.map(chapter => {
-              const draft = chapterDrafts[chapter.id] || {
-                chapter_number: chapter.chapter_number,
-                chaptername: chapter.chaptername || '',
-              }
-              const chapterEditing = editingChapterIds.has(chapter.id)
+            {outlineVolumes.map(volume => {
+              const volumeChapters = chapters.filter(chapter => chapter.volume_id === volume.id)
+              const expanded = expandedVolumeIds.has(volume.id)
               return (
-                <article className="detail-chapter-row" key={chapter.id}>
-                  <span className="chapter-number">{String(chapter.chapter_number).padStart(2, '0')}</span>
-                  {chapterEditing ? (
-                    <>
-                      <input
-                        type="number"
-                        min="1"
-                        value={draft.chapter_number}
-                        onChange={event =>
-                          setChapterDrafts(current => ({
-                            ...current,
-                            [chapter.id]: { ...draft, chapter_number: Number(event.target.value) },
-                          }))
-                        }
-                        aria-label={`${chapterTitle(chapter)}编号`}
-                      />
-                      <input
-                        value={draft.chaptername}
-                        onChange={event =>
-                          setChapterDrafts(current => ({
-                            ...current,
-                            [chapter.id]: { ...draft, chaptername: event.target.value },
-                          }))
-                        }
-                        aria-label={`${chapterTitle(chapter)}名称`}
-                      />
-                      <button
-                        className="secondary-button chapter-save-button"
-                        type="button"
-                        onClick={() => void saveChapter(chapter)}
-                        disabled={chapterSaving === chapter.id}
-                      >
-                        <Check size={14} />
-                        {chapterSaving === chapter.id ? '保存中…' : '保存章节'}
-                      </button>
-                    </>
-                  ) : (
-                    <div className="chapter-view-copy">
-                      <Link to={`/projects/${project.id}/chapters/${chapter.id}`}>
-                        <h3>{chapterTitle(chapter)}</h3>
-                        <p>更新于 {dateFormat.format(new Date(chapter.updated_at))}</p>
-                      </Link>
-                    </div>
-                  )}
+                <section className="chapter-volume-group" key={volume.id}>
                   <button
-                    className="secondary-button chapter-edit-button"
+                    className="chapter-volume-toggle"
                     type="button"
+                    aria-expanded={expanded}
                     onClick={() =>
-                      setEditingChapterIds(current => {
+                      setExpandedVolumeIds(current => {
                         const next = new Set(current)
-                        next.add(chapter.id)
+                        if (next.has(volume.id)) next.delete(volume.id)
+                        else next.add(volume.id)
                         return next
                       })
                     }
-                    disabled={chapterEditing || chapterSaving !== null}
                   >
-                    修改
+                    <span>
+                      <strong>第{volume.volume_number}卷</strong> {volume.name}
+                    </span>
+                    <small>
+                      {volumeChapters.length} 章 · {expanded ? '收起' : '展开'}
+                    </small>
                   </button>
-                  <button
-                    className="icon-button chapter-delete-button"
-                    type="button"
-                    aria-label={`将${chapterTitle(chapter)}移入回收站`}
-                    onClick={() => setChapterToRecycle(chapter)}
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </article>
+                  {expanded && volumeChapters.map(renderChapterRow)}
+                </section>
               )
             })}
+            {unassignedChapters.length > 0 && (
+              <section className="chapter-volume-group">
+                <button
+                  className="chapter-volume-toggle"
+                  type="button"
+                  aria-expanded={expandedVolumeIds.has(0)}
+                  onClick={() =>
+                    setExpandedVolumeIds(current => {
+                      const next = new Set(current)
+                      if (next.has(0)) next.delete(0)
+                      else next.add(0)
+                      return next
+                    })
+                  }
+                >
+                  <span>
+                    <strong>未分卷</strong>
+                  </span>
+                  <small>
+                    {unassignedChapters.length} 章 · {expandedVolumeIds.has(0) ? '收起' : '展开'}
+                  </small>
+                </button>
+                {expandedVolumeIds.has(0) && unassignedChapters.map(renderChapterRow)}
+              </section>
+            )}
           </div>
         )}
       </section>
@@ -712,6 +968,51 @@ export function ProjectDetailPage() {
             </button>
           </div>
         </div>
+      </Modal>
+      <Modal
+        open={coverAuthorDialogOpen}
+        title="生成智能封面"
+        onClose={() => setCoverAuthorDialogOpen(false)}
+        busy={generatingCover}
+      >
+        <form
+          className="modal-body form-stack"
+          onSubmit={event => {
+            event.preventDefault()
+            confirmGenerateCover()
+          }}
+        >
+          <p>封面将显示作者名，请确认后再开始生成。</p>
+          <label className="field">
+            <span>作者名</span>
+            <input
+              value={coverAuthorName}
+              onChange={event => {
+                setCoverAuthorName(event.target.value)
+                if (coverAuthorError) setCoverAuthorError('')
+              }}
+              maxLength={50}
+              placeholder="请输入作者名"
+              aria-label="作者名"
+              autoFocus
+              required
+            />
+          </label>
+          {coverAuthorError && (
+            <div className="form-message error" role="alert">
+              {coverAuthorError}
+            </div>
+          )}
+          <div className="modal-actions">
+            <button className="secondary-button" type="button" onClick={() => setCoverAuthorDialogOpen(false)}>
+              取消
+            </button>
+            <button className="primary-button" type="submit">
+              <Sparkles size={15} />
+              确认生成
+            </button>
+          </div>
+        </form>
       </Modal>
       <ProjectActionDialog
         project={recycleProjectOpen ? project : null}

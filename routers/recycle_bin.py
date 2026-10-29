@@ -5,7 +5,7 @@ from starlette import status
 from config.db_conf import get_db
 from crud import inspirations, recycle_bin
 from models.users import User
-from schemas.projects import ChapterInfo, ProjectInfoBase, RecycledChapterInfo
+from schemas.projects import ChapterInfo, ProjectInfoBase, RecycledChapterInfo, RecycledOutlineVolumeInfo
 from schemas.knowledge_base import KnowledgeBaseInfo
 from schemas.inspiration import InspirationInfo
 from utils.auth import get_current_user
@@ -57,6 +57,12 @@ async def get_recycled_projects(db: AsyncSession = Depends(get_db), user: User =
     return await _list_projects(db, user)
 
 
+@router.delete("/projects/clear")
+async def permanently_delete_all_projects(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    count = await recycle_bin.permanently_delete_all_projects(db, user.id)
+    return success_response(message="回收站作品已清空", data={"deleted_count": count})
+
+
 @router.put("/projects/{project_id}/restore")
 async def restore_project(
     project_id: int = Path(..., gt=0),
@@ -83,6 +89,12 @@ async def get_recycled_chapters(db: AsyncSession = Depends(get_db), user: User =
         for chapter, projectname, project_status in chapter_rows
     ]
     return success_response(message="获取回收站章节成功", data=response)
+
+
+@router.delete("/chapters/clear")
+async def permanently_delete_all_chapters(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    count = await recycle_bin.permanently_delete_all_chapters(db, user.id)
+    return success_response(message="回收站章节已清空", data={"deleted_count": count})
 
 
 @router.post("/chapters/{chapter_id}/trash")
@@ -124,6 +136,47 @@ async def permanently_delete_chapter(
     return success_response(message="章节已彻底删除")
 
 
+@router.get("/outline-volumes")
+async def get_recycled_outline_volumes(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    rows = await recycle_bin.get_recycled_outline_volumes(db, user.id)
+    response = [
+        RecycledOutlineVolumeInfo.model_validate(volume).model_copy(
+            update={"projectname": projectname, "project_status": project_status}
+        )
+        for volume, projectname, project_status in rows
+    ]
+    return success_response(message="获取回收站卷纲成功", data=response)
+
+
+@router.delete("/outline-volumes/clear")
+async def permanently_delete_all_outline_volumes(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    count = await recycle_bin.permanently_delete_all_outline_volumes(db, user.id)
+    return success_response(message="回收站卷纲已清空", data={"deleted_count": count})
+
+
+@router.put("/outline-volumes/{volume_id}/restore")
+async def restore_outline_volume(
+    volume_id: int = Path(..., gt=0), db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user),
+):
+    try:
+        volume = await recycle_bin.restore_outline_volume(db, volume_id, user.id)
+    except recycle_bin.ProjectInRecycleBinError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    if volume is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="回收站中不存在该卷纲")
+    return success_response(message="卷纲已还原", data=RecycledOutlineVolumeInfo.model_validate(volume))
+
+
+@router.delete("/outline-volumes/{volume_id}")
+async def permanently_delete_outline_volume(
+    volume_id: int = Path(..., gt=0), db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user),
+):
+    deleted = await recycle_bin.permanently_delete_outline_volume(db, volume_id, user.id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="回收站中不存在该卷纲")
+    return success_response(message="卷纲已彻底删除")
+
+
 @router.get("/knowledge-bases")
 async def get_recycled_knowledge_bases(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     bases = await recycle_bin.get_recycled_knowledge_bases(db, user.id)
@@ -134,6 +187,12 @@ async def get_recycled_knowledge_bases(db: AsyncSession = Depends(get_db), user:
         created_at=base.created_at, updated_at=base.updated_at, is_deleted=base.is_deleted,
     ) for base in bases]
     return success_response(message="获取回收站知识库成功", data=response)
+
+
+@router.delete("/knowledge-bases/clear")
+async def permanently_delete_all_knowledge_bases(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    count = await recycle_bin.permanently_delete_all_knowledge_bases(db, user.id)
+    return success_response(message="回收站知识库已清空", data={"deleted_count": count})
 
 
 @router.put("/knowledge-bases/{base_id}/restore")
@@ -165,6 +224,12 @@ async def permanently_delete_knowledge_base(
 async def get_recycled_inspirations(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     items = await inspirations.list_recycled_inspirations(db, user.id)
     return success_response(message="获取回收站灵感成功", data=[InspirationInfo.model_validate(item) for item in items])
+
+
+@router.delete("/inspirations/clear")
+async def permanently_delete_all_inspirations(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    count = await inspirations.permanently_delete_all_inspirations(db, user.id)
+    return success_response(message="回收站灵感已清空", data={"deleted_count": count})
 
 
 @router.put("/inspirations/{inspiration_id}/restore")

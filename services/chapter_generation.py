@@ -165,10 +165,19 @@ async def prepare_content_context(
         key_events="围绕作品大纲展开本章关键事件", ending_hook="留下推动下一章的悬念",
         expected_words=payload.expected_words or 3000,
     ))
+    volumes = await projects.get_outline_volumes(db, project.id)
+    current_volume = projects.resolve_outline_volume(
+        volumes, getattr(chapter, "volume_id", None), active_only=False,
+    )
+    volume_context = (
+        (current_volume.outline or "卷纲尚未填写")[:10000]
+        if current_volume is not None
+        else "当前章节尚未匹配到卷纲；依据作品总纲与前文连续性创作"
+    )
     prior_chapters = await projects.get_prior_chapter_memories(db, project.id, chapter.chapter_number)
     memory_chapters = await projects.get_story_memory_chapters(db, project.id, chapter.chapter_number)
     prior_context = "\n".join(
-        f"第 {item.chapter_number} 章《{item.chaptername or '未命名'}》摘要：{item.summary}\n"
+        f"第 {item.chapter_number} 章摘要：{item.summary}\n"
         f"人物状态：{(item.memory or {}).get('character_state', '未记录')}\n"
         f"未解决线索：{(item.memory or {}).get('unresolved_threads', '未记录')}"
         for item in prior_chapters if item.summary
@@ -176,7 +185,7 @@ async def prepare_content_context(
     story_memory = build_story_memory(memory_chapters)
     project_memories = await story_memory_crud.list_active_project_memories(db, project.id)
     memory_query = "\n".join((
-        chapter.chaptername or "", plan.objective, plan.conflict, plan.key_events,
+        plan.objective, plan.conflict, plan.key_events,
         plan.ending_hook, payload.user_idea or "",
     ))
     project_memory_context = build_project_memory_context(
@@ -184,17 +193,17 @@ async def prepare_content_context(
     )
     _, prompt = render_prompt(
         "chapter_content",
-        project_name=project.projectname or "未命名作品",
         project_type=project.project_type or "未指定",
         project_introduction=_limit_context(project.introduction or "未提供", 2000),
         project_outline=_limit_context(project.outline or "暂未提供，请依据简介自然展开", 12000),
+        current_state=_limit_context(project.current_state_markdown or "尚无当前状态记录", 8000),
+        volume_context=_limit_context(volume_context, 10000),
         prior_context=_limit_context(prior_context, 6000),
         story_memory=_limit_context(story_memory, 6000),
         project_memory_context=_limit_context(project_memory_context, 6000),
         plan=plan.model_dump(),
         user_idea=payload.user_idea.strip() if payload.user_idea and payload.user_idea.strip() else "未提供",
         chapter_number=chapter.chapter_number,
-        chapter_name=chapter.chaptername or "未命名章节",
         expected_words=plan.expected_words,
         objective=plan.objective,
         conflict=plan.conflict,
@@ -206,7 +215,7 @@ async def prepare_content_context(
         try:
             citations = await retrieve_knowledge(
                 db, user_id=user_id, knowledge_base_ids=payload.knowledge_base_ids,
-                query="\n".join((project.projectname or "", project.project_type or "", chapter.chaptername or "",
+                query="\n".join((project.project_type or "",
                                  plan.objective, plan.conflict, plan.key_events, payload.user_idea or "")),
             )
         except PermissionError as error:
@@ -392,7 +401,7 @@ async def run_content_job(
     except LLMConfigurationError:
         async with session_factory() as db:
             if job := await db.get(GenerationJob, job_id):
-                await generation_crud.update_job(db, job, status="failed", error_message="智能生成尚未配置模型，请先配置 LLM_MODEL、LLM_API_KEY 和 LLM_BASE_URL")
+                await generation_crud.update_job(db, job, status="failed", error_message="智能生成尚未配置模型，请先配置 MODEL、API_KEY 和 BASE_URL")
     except (LLMError, HTTPException) as error:
         async with session_factory() as db:
             if job := await db.get(GenerationJob, job_id):

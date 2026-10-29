@@ -3,14 +3,17 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { api } from '../api/client'
-import type { Chapter, Project } from '../types'
+import type { Chapter, OutlineVolume, Project } from '../types'
 import { ProjectDetailPage } from './ProjectDetailPage'
 
 vi.mock('../api/client', () => ({
   api: {
     getProject: vi.fn(),
     getProjectChapters: vi.fn(),
+    getOutlineVolumes: vi.fn(),
     updateProject: vi.fn(),
+    updateProjectState: vi.fn(),
+    generateProjectCover: vi.fn(),
     generateProjectOutline: vi.fn(),
     updateProjectOutline: vi.fn(),
     createChapter: vi.fn(),
@@ -27,10 +30,12 @@ const project: Project = {
   project_type: '科幻',
   cover_url: 'https://example.com/cover.jpg',
   total_words: 2400,
+  expected_words: 1000000,
   chapter_count: 1,
   created_at: '2026-10-17T09:00:00',
   updated_at: '2026-10-17T10:00:00',
   status: '连载中',
+  current_state_markdown: '# 当前状态\n\n## 主角状态\n刚刚启程。',
 }
 
 const chapter: Chapter = {
@@ -47,7 +52,14 @@ beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(api.getProject).mockResolvedValue(project)
   vi.mocked(api.getProjectChapters).mockResolvedValue([chapter])
+  vi.mocked(api.getOutlineVolumes).mockResolvedValue([])
   vi.mocked(api.updateProject).mockResolvedValue(project)
+  vi.mocked(api.updateProjectState).mockResolvedValue({
+    project_id: project.id,
+    current_state_markdown: project.current_state_markdown!,
+    updated_at: project.updated_at,
+  })
+  vi.mocked(api.generateProjectCover).mockResolvedValue(project)
   vi.mocked(api.generateProjectOutline).mockResolvedValue({
     project_id: project.id,
     expected_words: 120000,
@@ -86,10 +98,86 @@ describe('作品详情页', () => {
     expect(screen.getByText('章节管理')).toBeTruthy()
   })
 
+  it('生成智能封面前要求输入作者名，并把作者名传给后端', async () => {
+    const generated = { ...project, cover_url: '/uploads/covers/generated.svg' }
+    vi.mocked(api.generateProjectCover).mockResolvedValue(generated)
+    renderPage()
+
+    await userEvent.click(await screen.findByRole('button', { name: '编辑作品' }))
+    await userEvent.click(screen.getByRole('button', { name: '根据内容生成' }))
+    const dialog = screen.getByRole('dialog', { name: '生成智能封面' })
+    expect(api.generateProjectCover).not.toHaveBeenCalled()
+    await userEvent.type(within(dialog).getByRole('textbox', { name: '作者名' }), '星河作者')
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认生成' }))
+
+    expect(api.generateProjectCover).toHaveBeenCalledWith(project.id, '星河作者')
+    expect(await screen.findByText('智能封面已生成')).toBeTruthy()
+  })
+
+  it('正文进度使用章节统计字数累加，而不是作品缓存值', async () => {
+    vi.mocked(api.getProjectChapters).mockResolvedValue([{ ...chapter, content: '正文', word_count: 2 }])
+    renderPage()
+
+    expect(await screen.findByText('2 / 1,000,000 字')).toBeTruthy()
+  })
+
+  it('按卷分组章节并支持展开收起', async () => {
+    const volume: OutlineVolume = {
+      id: 101,
+      project_id: project.id,
+      volume_number: 1,
+      name: '星海启程',
+      expected_words: 200000,
+      start_chapter: 1,
+      end_chapter: 20,
+      outline: '离开故乡',
+      created_at: project.created_at,
+      updated_at: project.updated_at,
+    }
+    vi.mocked(api.getOutlineVolumes).mockResolvedValue([volume])
+    vi.mocked(api.getProjectChapters).mockResolvedValue([
+      { ...chapter, volume_id: volume.id },
+      { ...chapter, id: 9, chapter_number: 2, chaptername: '远航', volume_id: null },
+    ])
+    renderPage()
+
+    expect(await screen.findByRole('button', { name: /第1卷.*星海启程/ })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '启航' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '远航' })).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: /第1卷.*星海启程/ }))
+    expect(screen.queryByRole('heading', { name: '启航' })).toBeNull()
+    expect(screen.getByRole('heading', { name: '远航' })).toBeTruthy()
+  })
+
   it('作品详情只保留进入大纲页的入口，智能生成入口在大纲编辑页', async () => {
     renderPage()
     expect(await screen.findByRole('link', { name: '进入大纲详情' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: '智能生成' })).toBeNull()
+  })
+
+  it('展示并允许编辑作品当前状态 Markdown', async () => {
+    renderPage()
+
+    const openStateButton = await screen.findByRole('button', { name: '查看当前状态' })
+    expect(screen.queryByRole('heading', { name: '当前状态' })).toBeNull()
+    expect(document.querySelector('.project-state-preview')).toBeNull()
+    await userEvent.click(openStateButton)
+
+    expect(await screen.findByRole('heading', { name: '当前状态' })).toBeTruthy()
+    expect(document.querySelector('.project-state-preview')?.textContent).toBe(project.current_state_markdown)
+    await userEvent.click(screen.getByRole('button', { name: '收起' }))
+    expect(document.querySelector('.project-state-preview')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: '查看当前状态' }))
+
+    await userEvent.click(screen.getByRole('button', { name: '编辑状态' }))
+    const editor = screen.getByRole('textbox', { name: '当前状态 Markdown 文档' })
+    await userEvent.clear(editor)
+    await userEvent.type(editor, '# 当前状态{enter}{enter}## 世界观{enter}星河帝国')
+    await userEvent.click(screen.getByRole('button', { name: '保存状态' }))
+
+    expect(api.updateProjectState).toHaveBeenCalledWith(project.id, '# 当前状态\n\n## 世界观\n星河帝国')
+    expect(await screen.findByText('当前状态文档已保存')).toBeTruthy()
   })
 
   it('章节支持从详情页移入回收站并更新列表', async () => {
@@ -132,6 +220,7 @@ describe('作品详情页', () => {
       introduction: updated.introduction,
       project_type: updated.project_type,
       cover_url: updated.cover_url,
+      expected_words: updated.expected_words || 1000000,
       status: updated.status,
     })
     expect(await screen.findByText('作品信息已保存')).toBeTruthy()

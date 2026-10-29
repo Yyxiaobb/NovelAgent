@@ -38,7 +38,7 @@ class _RecentMemoriesArgs(_Args):
 
 TOOL_DEFINITIONS = [
     {"type": "function", "function": {
-        "name": "get_project_context", "description": "读取当前作品名称、类型、简介和大纲。",
+        "name": "get_project_context", "description": "读取当前作品类型、简介和大纲。",
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     }},
     {"type": "function", "function": {
@@ -58,7 +58,7 @@ TOOL_DEFINITIONS = [
         }, "required": ["chapter_id"], "additionalProperties": False},
     }},
     {"type": "function", "function": {
-        "name": "get_recent_chapter_memories", "description": "读取当前章节之前最近几章的摘要与连续性记忆。",
+        "name": "get_recent_chapter_memories", "description": "补充读取当前章节之前的结构化连续性记忆；已注入的章节摘要无需重复返回。",
         "parameters": {"type": "object", "properties": {
             "before_chapter_number": {"type": "integer", "minimum": 2},
             "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
@@ -78,7 +78,7 @@ async def _execute(name: str, raw_arguments: str, db: AsyncSession, *, project_i
         project = await projects.get_project(db, project_id, user_id)
         if project is None:
             return json.dumps({"error": "作品不可访问"}, ensure_ascii=False)
-        result = {"projectname": project.projectname, "project_type": project.project_type,
+        result = {"project_type": project.project_type,
                   "introduction": project.introduction, "outline": project.outline}
     elif name == "list_chapters":
         if not isinstance(args, dict) or args:
@@ -86,7 +86,7 @@ async def _execute(name: str, raw_arguments: str, db: AsyncSession, *, project_i
         chapters = await projects.get_project_chapters(db, project_id, user_id)
         if chapters is None:
             return json.dumps({"error": "作品不可访问"}, ensure_ascii=False)
-        result = [{"chapter_number": item.chapter_number, "chaptername": item.chaptername,
+        result = [{"chapter_number": item.chapter_number,
                    "has_plan": bool(item.plan), "has_content": bool(item.content)} for item in chapters[:100]]
     elif name == "search_story_memory":
         try:
@@ -107,7 +107,6 @@ async def _execute(name: str, raw_arguments: str, db: AsyncSession, *, project_i
             return json.dumps({"error": "章节不可访问"}, ensure_ascii=False)
         result = {
             "chapter_number": chapter.chapter_number,
-            "chaptername": chapter.chaptername,
             "plan": chapter.plan,
             "summary": chapter.summary,
             "memory": chapter.memory,
@@ -126,8 +125,6 @@ async def _execute(name: str, raw_arguments: str, db: AsyncSession, *, project_i
         result = [
             {
                 "chapter_number": chapter.chapter_number,
-                "chaptername": chapter.chaptername,
-                "summary": chapter.summary,
                 "memory": chapter.memory,
             }
             for chapter in chapters

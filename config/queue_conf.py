@@ -27,6 +27,12 @@ async def enqueue_content_job(job_id: str) -> bool:
     return job is not None
 
 
+async def enqueue_memory_job(job_id: str) -> bool:
+    async with get_queue_pool() as pool:
+        job = await pool.enqueue_job("generate_chapter_memory", job_id, _job_id=job_id)
+    return job is not None
+
+
 async def abort_content_job(job_id: str) -> bool:
     async with get_queue_pool() as pool:
         return await Job(job_id, pool).abort()

@@ -35,11 +35,11 @@ class EmbeddingRequestError(RuntimeError):
 def _embedding_settings() -> tuple[str, str, str]:
     load_dotenv(override=False)
     model = os.getenv("RAG_EMBEDDING_MODEL", "text-embedding-3-small").strip()
-    api_key = (os.getenv("RAG_EMBEDDING_API_KEY") or os.getenv("LLM_API_KEY") or os.getenv("API_KEY") or "").strip()
-    base_url = (os.getenv("RAG_EMBEDDING_BASE_URL") or os.getenv("LLM_BASE_URL") or os.getenv("BASE_URL") or "").strip()
+    api_key = (os.getenv("RAG_EMBEDDING_API_KEY") or os.getenv("API_KEY") or "").strip()
+    base_url = (os.getenv("RAG_EMBEDDING_BASE_URL") or os.getenv("BASE_URL") or "").strip()
     if not api_key or not base_url or not model:
         raise EmbeddingConfigurationError(
-            "知识库向量化尚未配置，请设置 RAG_EMBEDDING_MODEL、RAG_EMBEDDING_API_KEY 和 RAG_EMBEDDING_BASE_URL"
+            "知识库向量化尚未配置，请设置 RAG_EMBEDDING_MODEL、RAG_EMBEDDING_API_KEY 和 RAG_EMBEDDING_BASE_URL，或复用 API_KEY 和 BASE_URL"
         )
     return model, api_key, base_url
 

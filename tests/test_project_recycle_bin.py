@@ -1,4 +1,5 @@
 import json
+import re
 import unittest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -11,7 +12,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from config import db_conf
 from config.db_conf import Base, get_db
+from agent import LLMConfigurationError
 from models.projects import Chapter, Project
+from models.outline_volume import OutlineVolume
+from models.generation import GenerationJob
 from models.story_memory import StoryMemory, StoryMemoryEvent
 from models.users import User, UserToken
 from routers.projects import router
@@ -88,6 +92,208 @@ class RecycleBinTestCase(unittest.IsolatedAsyncioTestCase):
 
 
 class ProjectRecycleBinTests(RecycleBinTestCase):
+    async def test_bulk_recycle_bin_clear_routes_are_type_scoped(self):
+        for resource in ("projects", "chapters", "outline-volumes", "knowledge-bases", "inspirations"):
+            response = await self.client.delete(f"/api/recycle-bin/{resource}/clear")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["data"]["deleted_count"], 0)
+
+    async def test_bulk_clear_removes_all_recycled_projects_and_chapters(self):
+        project_id = await self.seed_project(chapter_count=2)
+        await self.client.post(f"/api/recycle-bin/projects/{project_id}/trash")
+        cleared_projects = await self.client.delete("/api/recycle-bin/projects/clear")
+        self.assertEqual(cleared_projects.json()["data"]["deleted_count"], 1)
+        self.assertEqual((await self.client.get("/api/recycle-bin/projects")).json()["data"], [])
+
+        active_project = await self.seed_project(chapter_count=1)
+        chapter_id = (await self.client.get(f"/api/project/{active_project}/chapters")).json()["data"][0]["id"]
+        await self.client.post(f"/api/recycle-bin/chapters/{chapter_id}/trash")
+        cleared_chapters = await self.client.delete("/api/recycle-bin/chapters/clear")
+        self.assertEqual(cleared_chapters.json()["data"]["deleted_count"], 1)
+        self.assertEqual((await self.client.get("/api/recycle-bin/chapters")).json()["data"], [])
+
+    async def test_outline_volumes_are_project_scoped_and_editable(self):
+        project_id = await self.seed_project()
+        created = await self.client.post(
+            f"/api/project/{project_id}/outline/volumes",
+            json={"name": "第一卷：启程", "expected_words": 250000, "start_chapter": 1, "end_chapter": 80,
+                  "outline": "主角离开故乡并发现线索。"},
+        )
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(created.json()["data"]["word_count"], 4)
+        volume = created.json()["data"]
+        self.assertEqual(volume["volume_number"], 1)
+        listed = await self.client.get(f"/api/project/{project_id}/outline/volumes")
+        self.assertEqual([entry["id"] for entry in listed.json()["data"]], [volume["id"]])
+
+        updated = await self.client.put(
+            f"/api/project/{project_id}/outline/volumes/{volume['id']}",
+            json={"name": "第一卷：信号", "expected_words": 240000, "start_chapter": 1, "end_chapter": 75,
+                  "outline": "主角发现来自远方的信号。"},
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["data"]["word_count"], 9)
+        self.assertEqual(updated.json()["data"]["outline"], "主角发现来自远方的信号。")
+
+        outsider = await self.client.get(f"/api/project/{project_id + 99}/outline/volumes")
+        self.assertEqual(outsider.status_code, 404)
+        deleted = await self.client.delete(f"/api/project/{project_id}/outline/volumes/{volume['id']}")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual((await self.client.get(f"/api/project/{project_id}/outline/volumes")).json()["data"], [])
+
+    async def test_chapters_can_be_assigned_to_a_volume_and_reject_foreign_volume(self):
+        project_id = await self.seed_project(chapter_count=0)
+        volume = await self.client.post(
+            f"/api/project/{project_id}/outline/volumes",
+            json={"name": "第一卷", "expected_words": 100000, "start_chapter": 1, "end_chapter": 20},
+        )
+        volume_id = volume.json()["data"]["id"]
+        created = await self.client.post(
+            f"/api/project/{project_id}/chapters",
+            json={"chapter_number": 1, "chaptername": "启程", "volume_id": volume_id},
+        )
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(created.json()["data"]["volume_id"], volume_id)
+        listed = await self.client.get(f"/api/project/{project_id}/chapters")
+        self.assertEqual(listed.json()["data"][0]["volume_id"], volume_id)
+
+        inferred = await self.client.post(
+            f"/api/project/{project_id}/chapters",
+            json={"chapter_number": 2, "chaptername": "自动归卷"},
+        )
+        self.assertEqual(inferred.status_code, 200)
+        self.assertEqual(inferred.json()["data"]["volume_id"], volume_id)
+        cleared = await self.client.put(
+            f"/api/project/{project_id}/chapters/{inferred.json()['data']['id']}",
+            json={"chapter_number": 2, "chaptername": "未分卷", "volume_id": None},
+        )
+        self.assertEqual(cleared.status_code, 200)
+        self.assertIsNone(cleared.json()["data"]["volume_id"])
+
+        other_project = await self.seed_project(user_id=2, chapter_count=0)
+        other_volume = await self.client.post(
+            f"/api/project/{other_project}/outline/volumes",
+            headers={"Authorization": "Bearer other-token"},
+            json={"name": "他人卷纲", "expected_words": 100000},
+        )
+        invalid = await self.client.post(
+            f"/api/project/{project_id}/chapters",
+            json={"chapter_number": 2, "chaptername": "越界", "volume_id": other_volume.json()["data"]["id"]},
+        )
+        self.assertEqual(invalid.status_code, 409)
+
+    async def test_outline_volumes_can_be_recycled_restored_and_permanently_deleted(self):
+        project_id = await self.seed_project()
+        created = await self.client.post(
+            f"/api/project/{project_id}/outline/volumes",
+            json={"name": "第一卷：启程", "expected_words": 100000, "outline": "主角离开故乡。"},
+        )
+        volume = created.json()["data"]
+        volume_id = volume["id"]
+
+        trashed = await self.client.delete(f"/api/project/{project_id}/outline/volumes/{volume_id}")
+        self.assertEqual(trashed.status_code, 200)
+        self.assertEqual(trashed.json()["message"], "卷纲已移入回收站")
+        listed = await self.client.get("/api/recycle-bin/outline-volumes")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.json()["data"][0]["id"], volume_id)
+        self.assertEqual(listed.json()["data"][0]["projectname"], "测试小说")
+        self.assertEqual((await self.client.get(f"/api/project/{project_id}/outline/volumes")).json()["data"], [])
+
+        restored = await self.client.put(f"/api/recycle-bin/outline-volumes/{volume_id}/restore")
+        self.assertEqual(restored.status_code, 200)
+        self.assertEqual(restored.json()["data"]["id"], volume_id)
+        self.assertEqual(len((await self.client.get(f"/api/project/{project_id}/outline/volumes")).json()["data"]), 1)
+
+        await self.client.delete(f"/api/project/{project_id}/outline/volumes/{volume_id}")
+        deleted = await self.client.delete(f"/api/recycle-bin/outline-volumes/{volume_id}")
+        self.assertEqual(deleted.status_code, 200)
+        missing = await self.client.get("/api/recycle-bin/outline-volumes")
+        self.assertEqual(missing.json()["data"], [])
+
+    async def test_outline_volume_restore_requires_active_parent_project(self):
+        project_id = await self.seed_project()
+        created = await self.client.post(
+            f"/api/project/{project_id}/outline/volumes",
+            json={"name": "第一卷", "expected_words": 100000},
+        )
+        volume_id = created.json()["data"]["id"]
+        await self.client.delete(f"/api/project/{project_id}/outline/volumes/{volume_id}")
+        await self.client.post(f"/api/recycle-bin/projects/{project_id}/trash")
+        response = await self.client.put(f"/api/recycle-bin/outline-volumes/{volume_id}/restore")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"], "请先还原所属作品，再还原卷纲")
+
+    async def test_outline_version_categories_list_and_restore_volume_and_rolling_plan(self):
+        project_id = await self.seed_project()
+        created = await self.client.post(
+            f"/api/project/{project_id}/outline/volumes",
+            json={"name": "第一卷", "expected_words": 100000, "outline": "初始卷纲"},
+        )
+        volume_id = created.json()["data"]["id"]
+        await self.client.put(
+            f"/api/project/{project_id}/outline/volumes/{volume_id}",
+            json={"name": "第一卷修订版", "expected_words": 120000, "outline": "修改后的卷纲"},
+        )
+        volume_versions = await self.client.get(f"/api/project/{project_id}/outline/volume-versions")
+        self.assertEqual(volume_versions.status_code, 200)
+        self.assertEqual(volume_versions.json()["data"][0]["outline"], "初始卷纲")
+        volume_version_id = volume_versions.json()["data"][0]["id"]
+        volume_restored = await self.client.post(
+            f"/api/project/{project_id}/outline/volume-versions/{volume_version_id}/restore"
+        )
+        self.assertEqual(volume_restored.status_code, 200)
+        self.assertEqual(volume_restored.json()["data"]["outline"], "初始卷纲")
+
+        chapter_id = (await self.client.get(f"/api/project/{project_id}/chapters")).json()["data"][0]["id"]
+        plan_a = {"objective": "规划A", "conflict": "冲突A", "key_events": "事件A", "ending_hook": "钩子A", "expected_words": 2000}
+        plan_b = {"objective": "规划B", "conflict": "冲突B", "key_events": "事件B", "ending_hook": "钩子B", "expected_words": 2200}
+        await self.client.put(
+            f"/api/project/{project_id}/chapters/{chapter_id}",
+            json={"chapter_number": 1, "chaptername": "第一章", "content": "当前正文", "plan": plan_a},
+        )
+        await self.client.put(
+            f"/api/project/{project_id}/chapters/{chapter_id}",
+            json={"chapter_number": 1, "chaptername": "第一章", "content": "更新后的正文", "plan": plan_b},
+        )
+        rolling_versions = await self.client.get(f"/api/project/{project_id}/outline/rolling-versions")
+        self.assertEqual(rolling_versions.status_code, 200)
+        version = next(item for item in rolling_versions.json()["data"] if item["plan"]["objective"] == "规划A")
+        plan_restored = await self.client.post(
+            f"/api/project/{project_id}/outline/rolling-versions/{version['id']}/restore"
+        )
+        self.assertEqual(plan_restored.status_code, 200)
+        self.assertEqual(plan_restored.json()["data"]["plan"]["objective"], "规划A")
+        self.assertEqual(plan_restored.json()["data"]["content"], "更新后的正文")
+
+    async def test_project_list_accepts_legacy_single_digit_project_name(self):
+        async with self.sessions() as session:
+            session.add(Project(user_id=1, projectname="4", status="连载中"))
+            await session.commit()
+
+        response = await self.client.get("/api/project/projects")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"][0]["projectname"], "4")
+
+    async def test_new_projects_reuse_lowest_number_except_numbers_in_recycle_bin(self):
+        first = await self.client.post("/api/project/newProject", json={"project_type": "科幻"})
+        second = await self.client.post("/api/project/newProject", json={"project_type": "科幻"})
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.json()["data"]["projectname"], "01")
+        self.assertEqual(second.json()["data"]["projectname"], "02")
+
+        second_id = second.json()["data"]["id"]
+        await self.client.post(f"/api/recycle-bin/projects/{second_id}/trash")
+        third = await self.client.post("/api/project/newProject", json={"project_type": "科幻"})
+        self.assertEqual(third.json()["data"]["projectname"], "03")
+
+        deleted = await self.client.delete(f"/api/recycle-bin/projects/{second_id}")
+        self.assertEqual(deleted.status_code, 200)
+        replacement = await self.client.post("/api/project/newProject", json={"project_type": "科幻"})
+        self.assertEqual(replacement.status_code, 200)
+        self.assertEqual(replacement.json()["data"]["projectname"], "02")
+
     async def test_recycle_and_restore_preserve_each_status_and_chapters(self):
         for original_status in ("连载中", "完结", "断更"):
             with self.subTest(status=original_status):
@@ -212,6 +418,284 @@ class ProjectRecycleBinTests(RecycleBinTestCase):
 
 
 class ProjectEditingTests(RecycleBinTestCase):
+    async def test_saving_new_chapter_content_queues_background_memory_job(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            chapter = (await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).one()
+            chapter_id = chapter.id
+
+        with patch("routers.projects.enqueue_memory_job", new=AsyncMock(return_value=True)) as enqueue:
+            response = await self.client.put(
+                f"/api/project/{project_id}/chapters/{chapter_id}",
+                json={"chapter_number": 1, "chaptername": "第一章", "content": "新的正文"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        enqueue.assert_awaited_once()
+        async with self.sessions() as session:
+            job = (await session.scalars(select(GenerationJob).where(
+                GenerationJob.project_id == project_id,
+                GenerationJob.chapter_id == chapter_id,
+                GenerationJob.job_type == "chapter_memory",
+            ))).one()
+            self.assertEqual(job.status, "queued")
+
+    async def test_creating_chapter_with_saved_content_queues_state_update(self):
+        project_id = await self.seed_project(chapter_count=1)
+        with patch("routers.projects.enqueue_memory_job", new=AsyncMock(return_value=True)) as enqueue:
+            response = await self.client.post(
+                f"/api/project/{project_id}/chapters",
+                json={"chapter_number": 3, "chaptername": "新章", "content": "主角抵达边境城。"},
+            )
+        self.assertEqual(response.status_code, 200)
+        chapter_id = response.json()["data"]["id"]
+        enqueue.assert_awaited_once()
+        async with self.sessions() as session:
+            job = await session.scalar(select(GenerationJob).where(
+                GenerationJob.project_id == project_id,
+                GenerationJob.chapter_id == chapter_id,
+                GenerationJob.job_type == "chapter_memory",
+            ))
+            self.assertIsNotNone(job)
+            self.assertEqual(job.status, "queued")
+
+    async def test_project_current_state_markdown_can_be_saved_and_read(self):
+        project_id = await self.seed_project(chapter_count=0)
+        state = "# 当前状态\n\n## 主角状态\n刚抵达边境城。"
+        response = await self.client.put(
+            f"/api/project/{project_id}/state",
+            json={"current_state_markdown": state},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["current_state_markdown"], state)
+        detail = await self.client.get(f"/api/project/detail/{project_id}")
+        self.assertEqual(detail.json()["data"]["current_state_markdown"], state)
+
+    async def test_rolling_plan_model_failure_does_not_create_missing_chapters(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            chapter = (await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).one()
+            chapter_id = chapter.id
+
+        with patch(
+            "routers.chapter_generation.generation_client",
+            side_effect=LLMConfigurationError("missing model"),
+        ):
+            response = await self.client.post(
+                f"/api/agent/projects/{project_id}/chapters/rolling-plan",
+                json={
+                    "chapter_ids": [chapter_id],
+                    "chapter_numbers": [1, 2, 3, 4, 5],
+                },
+            )
+
+        self.assertEqual(response.status_code, 503)
+        async with self.sessions() as session:
+            chapters = list((await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).all())
+            self.assertEqual(len(chapters), 1)
+
+    async def test_rolling_plan_persists_new_chapters_only_after_valid_model_output(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            chapter = (await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).one()
+            chapter_id = chapter.id
+
+        class DummyGenerationClient:
+            model = "test-model"
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+        plans = [
+            {
+                "chapter_id": 1 if number == 1 else -number,
+                "chapter_number": number,
+                "chapter_name": f"第{number}章",
+                "plan": {
+                    "objective": f"目标{number}", "conflict": "冲突", "key_events": "事件",
+                    "ending_hook": "钩子", "expected_words": 3000,
+                },
+            }
+            for number in range(1, 6)
+        ]
+        with patch("routers.chapter_generation.generation_client", return_value=DummyGenerationClient()), patch(
+            "routers.chapter_generation.run_agent",
+            new=AsyncMock(return_value=json.dumps({"plans": plans}, ensure_ascii=False)),
+        ):
+            response = await self.client.post(
+                f"/api/agent/projects/{project_id}/chapters/rolling-plan",
+                json={"chapter_ids": [chapter_id], "chapter_numbers": [1, 2, 3, 4, 5]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        async with self.sessions() as session:
+            chapters = list((await session.scalars(
+                select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_number)
+            )).all())
+            self.assertEqual([item.chapter_number for item in chapters], [1, 2, 3, 4, 5])
+            self.assertTrue(all(item.plan for item in chapters))
+
+    async def test_rolling_plan_advances_volume_only_after_goal_judgment(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            session.add_all([
+                OutlineVolume(
+                    project_id=project_id, volume_number=1, name="第一卷", expected_words=100000,
+                    start_chapter=1, end_chapter=3, outline="第一卷专属方向：发现遗迹",
+                ),
+                OutlineVolume(
+                    project_id=project_id, volume_number=2, name="第二卷", expected_words=100000,
+                    start_chapter=4, end_chapter=6, outline="第二卷专属方向：深入北境",
+                ),
+            ])
+            await session.commit()
+
+        class DummyGenerationClient:
+            model = "test-model"
+
+            def __init__(self):
+                self.prompts = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def achat(self, messages, **_kwargs):
+                prompt = messages[1]["content"]
+                self.prompts.append(prompt)
+                items = [
+                    {
+                        "chapter_id": int(chapter_id), "chapter_number": int(number),
+                        "plan": {
+                            "objective": f"目标{number}", "conflict": "冲突", "key_events": "事件",
+                            "ending_hook": "钩子", "expected_words": 3000,
+                        },
+                    }
+                    for chapter_id, number in re.findall(r"- chapter_id=(-?\d+)，第(\d+)章", prompt)
+                ]
+                return json.dumps({
+                    "plans": items,
+                    "volume_complete": True,
+                    "volume_completion_note": "本卷核心冲突已解决并形成阶段收束",
+                }, ensure_ascii=False)
+
+        dummy = DummyGenerationClient()
+        with patch("routers.chapter_generation.generation_client", return_value=dummy):
+            response = await self.client.post(
+                f"/api/agent/projects/{project_id}/chapters/rolling-plan",
+                json={"chapter_numbers": [2, 3, 4, 5]},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(dummy.prompts), 1)
+        self.assertIn("第一卷专属方向：发现遗迹", dummy.prompts[0])
+        self.assertNotIn("第二卷专属方向：深入北境", dummy.prompts[0])
+        self.assertTrue(response.json()["data"]["volume_complete"])
+        async with self.sessions() as session:
+            volumes = {
+                volume.volume_number: volume
+                for volume in (await session.scalars(select(OutlineVolume).where(OutlineVolume.project_id == project_id))).all()
+            }
+            chapters = list((await session.scalars(
+                select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_number)
+            )).all())
+            self.assertEqual([chapter.volume_id for chapter in chapters if chapter.chapter_number in (2, 3, 4, 5)], [volumes[1].id] * 4)
+            self.assertTrue(volumes[1].is_completed)
+            self.assertFalse(volumes[2].is_completed)
+
+        with patch("routers.chapter_generation.generation_client", return_value=dummy):
+            next_response = await self.client.post(
+                f"/api/agent/projects/{project_id}/chapters/rolling-plan",
+                json={"chapter_numbers": [6, 7]},
+            )
+        self.assertEqual(next_response.status_code, 200, next_response.text)
+        self.assertEqual(len(dummy.prompts), 2)
+        self.assertIn("第二卷专属方向：深入北境", dummy.prompts[1])
+        self.assertNotIn("第一卷专属方向：发现遗迹", dummy.prompts[1])
+        async with self.sessions() as session:
+            volumes = {
+                volume.volume_number: volume
+                for volume in (await session.scalars(select(OutlineVolume).where(OutlineVolume.project_id == project_id))).all()
+            }
+            chapters = list((await session.scalars(select(Chapter).where(
+                Chapter.project_id == project_id, Chapter.chapter_number.in_([6, 7]),
+            ))).all())
+            self.assertEqual([chapter.volume_id for chapter in chapters], [volumes[2].id] * 2)
+            self.assertTrue(volumes[2].is_completed)
+
+    async def test_single_plan_completion_waits_for_user_save_before_advancing(self):
+        project_id = await self.seed_project(chapter_count=1)
+        async with self.sessions() as session:
+            chapter = (await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).one()
+            chapter_id = chapter.id
+            session.add_all([
+                OutlineVolume(project_id=project_id, volume_number=1, name="第一卷", outline="第一卷目标"),
+                OutlineVolume(project_id=project_id, volume_number=2, name="第二卷", outline="第二卷目标"),
+            ])
+            await session.commit()
+
+        class DummyGenerationClient:
+            model = "test-model"
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+        raw = json.dumps({
+            "objective": "完成第一卷主线",
+            "conflict": "解决核心冲突",
+            "key_events": "主线揭晓并完成关键行动",
+            "ending_hook": "留下新篇章线索",
+            "expected_words": 3000,
+            "volume_complete": True,
+            "volume_completion_note": "第一卷目标已实现",
+        }, ensure_ascii=False)
+        with patch("routers.chapter_generation.generation_client", return_value=DummyGenerationClient()), patch(
+            "routers.chapter_generation.run_agent", new=AsyncMock(return_value=raw),
+        ):
+            generated = await self.client.post(
+                f"/api/agent/projects/{project_id}/chapters/{chapter_id}/plan",
+                json={"expected_words": 3000},
+            )
+
+        self.assertEqual(generated.status_code, 200, generated.text)
+        data = generated.json()["data"]
+        self.assertTrue(data["volume_complete"])
+        self.assertIsNotNone(data["volume_id"])
+        async with self.sessions() as session:
+            volume = await session.get(OutlineVolume, data["volume_id"])
+            self.assertFalse(volume.is_completed)
+
+        saved = await self.client.put(
+            f"/api/project/{project_id}/chapters/{chapter_id}",
+            json={
+                "chapter_number": 1, "chaptername": "第一章", "content": None,
+                "plan": data["plan"], "volume_id": data["volume_id"],
+                "volume_complete": True, "volume_completion_note": data["volume_completion_note"],
+            },
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        next_chapter = await self.client.post(
+            f"/api/project/{project_id}/chapters",
+            json={"chapter_number": 2, "chaptername": "第二章"},
+        )
+        self.assertEqual(next_chapter.status_code, 200, next_chapter.text)
+        async with self.sessions() as session:
+            volume = await session.get(OutlineVolume, data["volume_id"])
+            self.assertTrue(volume.is_completed)
+            second_volume = await session.scalar(select(OutlineVolume).where(
+                OutlineVolume.project_id == project_id, OutlineVolume.volume_number == 2,
+            ))
+            created_chapter = await session.get(Chapter, next_chapter.json()["data"]["id"])
+            self.assertEqual(created_chapter.volume_id, second_volume.id)
+
     async def test_story_memory_crud_is_project_scoped_and_used_for_generation(self):
         project_id = await self.seed_project(chapter_count=1)
         async with self.sessions() as session:
@@ -538,6 +1022,7 @@ class ProjectEditingTests(RecycleBinTestCase):
         self.assertIn("作品类型：科幻", prompt)
         self.assertIn("约 120000 字", prompt)
         self.assertIn("双主角视角，结局温暖", prompt)
+        self.assertNotIn("星河归途", prompt)
         async with self.sessions() as session:
             self.assertEqual((await session.get(Project, project_id)).expected_words, 120000)
 
@@ -562,6 +1047,13 @@ class ProjectEditingTests(RecycleBinTestCase):
             chapter = (await session.execute(select(Chapter).where(Chapter.project_id == project_id))).scalar_one()
             chapter.chaptername = "启航"
             chapter_id = chapter.id
+            volume = OutlineVolume(
+                project_id=project_id, volume_number=1, name="第一卷", expected_words=100000,
+                start_chapter=1, end_chapter=1, outline="本卷专属方向：启动星门",
+            )
+            session.add(volume)
+            await session.flush()
+            chapter.volume_id = volume.id
             await session.commit()
 
         with patch("services.generation_runtime.LLMClient") as llm_class:
@@ -578,7 +1070,10 @@ class ProjectEditingTests(RecycleBinTestCase):
         prompt = client.achat.await_args.args[0][1]["content"]
         self.assertIn("作品类型：科幻", prompt)
         self.assertIn("第一卷：穿越深空", prompt)
+        self.assertIn("本卷专属方向：启动星门", prompt)
         self.assertIn("第 1 章", prompt)
+        self.assertNotIn("测试小说", prompt)
+        self.assertNotIn("启航", prompt)
         self.assertIn("约 2500 字", prompt)
         self.assertIn("结尾出现新的线索", prompt)
 
@@ -611,12 +1106,14 @@ class ProjectEditingTests(RecycleBinTestCase):
         self.assertIn("主角在遗迹中获得了残缺地图", prompt)
         self.assertIn("主角决定追查地图来源", prompt)
         self.assertIn("地图指向北境关隘", prompt)
+        self.assertIn("作品当前状态（Markdown）", prompt)
 
     async def test_generate_chapter_memory_persists_summary_and_structured_memory(self):
         project_id = await self.seed_project(chapter_count=1)
         async with self.sessions() as session:
             chapter = (await session.scalars(select(Chapter).where(Chapter.project_id == project_id))).one()
             chapter.content = "主角在雨夜救下信使，并得知王城即将封锁。"
+            chapter.chaptername = "雨夜救信使"
             chapter_id = chapter.id
             await session.commit()
 
@@ -626,6 +1123,7 @@ class ProjectEditingTests(RecycleBinTestCase):
             "setting_changes": "王城即将封锁",
             "unresolved_threads": "信使携带的密函来源不明",
             "timeline": "雨夜，王城封锁前",
+            "project_state_markdown": "# 当前状态\n\n## 主角状态\n主角决定护送信使。",
         }
         with patch("services.generation_runtime.LLMClient") as llm_class:
             client = llm_class.return_value.__aenter__.return_value
@@ -636,12 +1134,21 @@ class ProjectEditingTests(RecycleBinTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        prompt = client.achat.await_args.args[0][1]["content"]
+        self.assertNotIn("测试小说", prompt)
+        self.assertNotIn("雨夜救信使", prompt)
+        self.assertIn("现有作品当前状态", prompt)
         self.assertEqual(response.json()["data"]["summary"], generated["summary"])
-        self.assertEqual(response.json()["data"]["memory"], {key: generated[key] for key in generated if key != "summary"})
+        self.assertEqual(
+            response.json()["data"]["memory"],
+            {key: generated[key] for key in ("character_state", "setting_changes", "unresolved_threads", "timeline")},
+        )
         async with self.sessions() as session:
             saved = await session.get(Chapter, chapter_id)
             self.assertEqual(saved.summary, generated["summary"])
             self.assertEqual(saved.memory["unresolved_threads"], generated["unresolved_threads"])
+            project = await session.get(Project, project_id)
+            self.assertEqual(project.current_state_markdown, generated["project_state_markdown"])
 
         pending = (await self.client.get(f"/api/project/{project_id}/memories")).json()["data"]
         suggestions = [item for item in pending if item["origin"] == "chapter_extract"]

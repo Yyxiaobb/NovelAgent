@@ -32,6 +32,7 @@ export interface Project {
   project_type?: string | null
   cover_url?: string | null
   outline?: string | null
+  current_state_markdown?: string | null
   expected_words?: number | null
   total_words: number
   chapter_count: number
@@ -52,6 +53,8 @@ export interface Chapter {
   created_at: string
   updated_at: string
   is_deleted: boolean
+  volume_id?: number | null
+  word_count?: number
 }
 
 export interface ChapterPlan {
@@ -60,6 +63,28 @@ export interface ChapterPlan {
   key_events: string
   ending_hook: string
   expected_words: number
+}
+
+export interface OutlineVolume {
+  id: number
+  project_id: number
+  volume_number: number
+  name: string
+  expected_words?: number
+  start_chapter?: number | null
+  end_chapter?: number | null
+  outline: string | null
+  is_completed?: boolean
+  completion_note?: string | null
+  completed_at?: string | null
+  is_deleted?: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface RecycledOutlineVolume extends OutlineVolume {
+  projectname: string | null
+  project_status: string | null
 }
 
 export interface ChapterMemory {
@@ -191,6 +216,21 @@ export interface OutlineVersion {
   project_id: number
   version_number: number
   source: string
+  outline: string | null
+  created_at: string
+}
+
+export interface OutlineVolumeVersion {
+  id: number
+  project_id: number
+  volume_id: number
+  version_number: number
+  source: string
+  volume_number: number
+  name: string
+  expected_words: number
+  start_chapter: number | null
+  end_chapter: number | null
   outline: string | null
   created_at: string
 }

@@ -63,6 +63,47 @@ async def create_chapter_content_job(
     return job
 
 
+async def create_chapter_memory_job(
+    db: AsyncSession,
+    *,
+    job_id: str,
+    user_id: int,
+    project_id: int,
+    chapter_id: int,
+    user_idea: str | None = None,
+) -> GenerationJob:
+    job = GenerationJob(
+        id=job_id,
+        user_id=user_id,
+        project_id=project_id,
+        chapter_id=chapter_id,
+        job_type="chapter_memory",
+        input_payload={"user_idea": user_idea} if user_idea else {},
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+
+async def get_active_memory_job(
+    db: AsyncSession,
+    *,
+    project_id: int,
+    chapter_id: int,
+) -> GenerationJob | None:
+    return await db.scalar(
+        select(GenerationJob)
+        .where(
+            GenerationJob.project_id == project_id,
+            GenerationJob.chapter_id == chapter_id,
+            GenerationJob.job_type == "chapter_memory",
+            GenerationJob.status.in_(("queued", "running")),
+        )
+        .order_by(GenerationJob.created_at.desc())
+    )
+
+
 async def update_job(db: AsyncSession, job: GenerationJob, **values) -> GenerationJob:
     for key, value in values.items():
         setattr(job, key, value)

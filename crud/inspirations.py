@@ -20,6 +20,24 @@ async def get_inspiration(db: AsyncSession, inspiration_id: int, user_id: int, *
     return await db.scalar(select(Inspiration).where(*conditions))
 
 
+async def get_inspirations_for_generation(
+    db: AsyncSession, user_id: int, inspiration_ids: list[int]
+) -> list[Inspiration]:
+    """Load selected, non-deleted inspirations in the caller's order."""
+    selected = list(dict.fromkeys(inspiration_ids))
+    if not selected:
+        return []
+    items = list((await db.scalars(select(Inspiration).where(
+        Inspiration.user_id == user_id,
+        Inspiration.id.in_(selected),
+        Inspiration.is_deleted.is_(False),
+    ))).all())
+    by_id = {item.id: item for item in items}
+    if len(by_id) != len(selected):
+        raise PermissionError("所选灵感不存在或已在回收站")
+    return [by_id[item_id] for item_id in selected]
+
+
 async def create_inspiration(db: AsyncSession, user_id: int, *, title: str, content: str):
     item = Inspiration(user_id=user_id, title=title, content=content)
     db.add(item)
@@ -77,3 +95,14 @@ async def permanently_delete_inspiration(db: AsyncSession, inspiration_id: int, 
     await db.delete(item)
     await db.commit()
     return True
+
+
+async def permanently_delete_all_inspirations(db: AsyncSession, user_id: int) -> int:
+    items = list((await db.scalars(select(Inspiration).where(
+        Inspiration.user_id == user_id,
+        Inspiration.is_deleted.is_(True),
+    ).with_for_update())).all())
+    for item in items:
+        await db.delete(item)
+    await db.commit()
+    return len(items)
