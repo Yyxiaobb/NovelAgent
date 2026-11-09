@@ -224,7 +224,10 @@ async def run_review_loop(
             candidate = await generate_candidate(client, draft, review)
             if isinstance(candidate, tuple):
                 draft, decisions = candidate
-                revision_decisions.extend(decisions)
+                revision_decisions.extend(
+                    decision.model_copy(update={"round": round_number})
+                    for decision in decisions
+                )
             else:
                 draft = candidate
             draft = draft.strip()

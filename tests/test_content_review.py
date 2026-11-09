@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from schemas.agent import ContentReview
+from schemas.agent import ContentReview, RevisionDecision
 from services.chapter_generation import validate_content_quality
 from services.content_review import (
     is_review_acceptable,
@@ -85,6 +85,7 @@ class ContentReviewTests(unittest.IsolatedAsyncioTestCase):
         content, decisions = parse_revision_output(structured)
         self.assertEqual(content, self.content)
         self.assertEqual(decisions[0].decision, "rejected")
+        self.assertIsNone(decisions[0].round)
         plain_content, plain_decisions = parse_revision_output(self.content)
         self.assertEqual(plain_content, self.content)
         self.assertEqual(plain_decisions, [])
@@ -143,6 +144,31 @@ class ContentReviewTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.stop_reason, "threshold_reached")
         self.assertEqual([item["round"] for item in persisted], [1])
+
+    async def test_loop_tags_revision_decisions_with_review_round(self):
+        client = SimpleNamespace(
+            model="review-model",
+            achat=AsyncMock(side_effect=[self.review_json(70, stop=False), self.review_json(90, stop=True)]),
+        )
+
+        @asynccontextmanager
+        async def factory():
+            yield client
+
+        async def candidate(_client, previous, review):
+            if previous is None:
+                return self.content
+            return self.content + "修订" * 30, [RevisionDecision(
+                issue_id="issue-1", decision="partially_accepted", reason="保留伏笔",
+            )]
+
+        result = await run_review_loop(
+            self.context, factory, candidate,
+            lambda value: validate_content_quality(value, 3000),
+            max_rounds=2, accept_score=85,
+        )
+        self.assertEqual(result.stop_reason, "threshold_reached")
+        self.assertEqual(result.revision_decisions[0].round, 1)
 
 
 if __name__ == "__main__":

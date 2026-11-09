@@ -228,6 +228,7 @@ export interface GenerationReviewIteration {
 }
 
 export interface RevisionDecision {
+  round?: number | null
   issue_id: string
   decision: 'accepted' | 'partially_accepted' | 'rejected'
   reason: string

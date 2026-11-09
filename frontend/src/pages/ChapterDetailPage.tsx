@@ -679,23 +679,31 @@ export function ChapterDetailPage() {
                                 {job.generation_info?.revision_decisions && job.generation_info.revision_decisions.length > 0 && (
                                   <section className="review-decisions">
                                     <h4>修订决策</h4>
-                                    <ul className="review-decision-list">
-                                      {job.generation_info.revision_decisions.map((decision, index) => (
-                                        <li key={`${job.job_id}-${decision.issue_id}-${index}`}>
-                                          <div className="review-decision-heading">
-                                            <strong>
-                                              {decision.decision === 'accepted'
-                                                ? '已采纳'
-                                                : decision.decision === 'partially_accepted'
-                                                  ? '部分采纳'
-                                                  : '已拒绝'}
-                                            </strong>
-                                            <span>{decision.issue_id}</span>
-                                          </div>
-                                          <p>{decision.reason}</p>
-                                        </li>
-                                      ))}
-                                    </ul>
+                                    {[...new Set(job.generation_info.revision_decisions.map(decision => decision.round ?? 0))].map(round => (
+                                      <div className="review-decision-round" key={`${job.job_id}-decision-round-${round}`}>
+                                        <strong>{round > 0 ? `第 ${round} 轮修订` : '修订决策'}</strong>
+                                        <ul className="review-decision-list">
+                                          {(job.generation_info?.revision_decisions ?? [])
+                                            .map((decision, index) => ({ decision, index }))
+                                            .filter(({ decision }) => (decision.round ?? 0) === round)
+                                            .map(({ decision, index }) => (
+                                              <li key={`${job.job_id}-${decision.issue_id}-${index}`}>
+                                                <div className="review-decision-heading">
+                                                  <strong>
+                                                    {decision.decision === 'accepted'
+                                                      ? '已采纳'
+                                                      : decision.decision === 'partially_accepted'
+                                                        ? '部分采纳'
+                                                        : '已拒绝'}
+                                                  </strong>
+                                                  <span>{decision.issue_id}</span>
+                                                </div>
+                                                <p>{decision.reason}</p>
+                                              </li>
+                                            ))}
+                                        </ul>
+                                      </div>
+                                    ))}
                                   </section>
                                 )}
                               </div>

@@ -157,6 +157,7 @@ class ContentReview(BaseModel):
 
 
 class RevisionDecision(BaseModel):
+    round: Optional[int] = Field(default=None, ge=1, le=3)
     issue_id: str = Field(..., min_length=1, max_length=80)
     decision: Literal["accepted", "partially_accepted", "rejected"]
     reason: str = Field(..., min_length=1, max_length=1000)

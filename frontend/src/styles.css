@@ -2405,6 +2405,14 @@ p {
   color: var(--ink);
   font-size: 12px;
 }
+.review-decision-round {
+  display: grid;
+  gap: 5px;
+}
+.review-decision-round > strong {
+  color: var(--muted);
+  font-size: 11px;
+}
 .review-decision-list {
   display: grid;
   gap: 6px;
