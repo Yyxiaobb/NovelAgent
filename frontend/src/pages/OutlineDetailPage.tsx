@@ -25,10 +25,14 @@ import type {
 import { KnowledgeBaseSelector } from '../components/KnowledgeBaseSelector'
 import { KnowledgeCitationList } from '../components/KnowledgeCitationList'
 import { InspirationSelector } from '../components/InspirationSelector'
+import { DraftRecoveryBanner } from '../components/DraftRecoveryBanner'
+import { useDraftProtection } from '../hooks/useDraftProtection'
 
 export function OutlineDetailPage() {
   const { projectId, feature } = useParams()
   const [outline, setOutline] = useState('')
+  const [savedOutline, setSavedOutline] = useState('')
+  const [outlineLoadedForProject, setOutlineLoadedForProject] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [projectName, setProjectName] = useState('作品大纲')
   const [editing, setEditing] = useState(false)
@@ -40,7 +44,7 @@ export function OutlineDetailPage() {
   const [generationIdea, setGenerationIdea] = useState('')
   const [generationDialogOpen, setGenerationDialogOpen] = useState(false)
   const [generationError, setGenerationError] = useState('')
-  const [inspirationItems, setInspirationItems] = useState<Inspiration[]>([])
+  const [, setInspirationItems] = useState<Inspiration[]>([])
   const [inspirationIds, setInspirationIds] = useState<number[]>([])
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -57,6 +61,8 @@ export function OutlineDetailPage() {
   const [activeLevel, setActiveLevel] = useState<'total' | 'volumes' | 'chapters'>('total')
   const [chapters, setChapters] = useState<Chapter[]>([])
   const [volumes, setVolumes] = useState<OutlineVolume[]>([])
+  const [savedVolumes, setSavedVolumes] = useState<OutlineVolume[]>([])
+  const [volumesLoadedForProject, setVolumesLoadedForProject] = useState<string | null>(null)
   const [volumeEditing, setVolumeEditing] = useState<Record<number, boolean>>({})
   const [volumeLoading, setVolumeLoading] = useState(false)
   const [volumeSaving, setVolumeSaving] = useState<number | null>(null)
@@ -72,7 +78,30 @@ export function OutlineDetailPage() {
     name: '',
     outline: '',
   })
+  const [newVolumeDraftDirty, setNewVolumeDraftDirty] = useState(false)
+  const outlineProtection = useDraftProtection(
+    projectId ? `novel-agent:draft:outline:${projectId}` : null,
+    { outline: draft, expectedWords },
+    { outline: savedOutline, expectedWords: savedExpectedWords },
+    Boolean(projectId && outlineLoadedForProject === projectId && !loading),
+  )
+  const volumeProtection = useDraftProtection(
+    projectId ? `novel-agent:draft:outline-volumes:${projectId}` : null,
+    { volumes, newVolumeDraft: newVolumeDraftDirty ? newVolumeDraft : null },
+    { volumes: savedVolumes, newVolumeDraft: null },
+    Boolean(projectId && volumesLoadedForProject === projectId),
+  )
   const firstUnwrittenChapter = chapters.findIndex(chapter => !(chapter.content || '').trim())
+  const activeDraftStatus = activeLevel === 'total'
+    ? outlineProtection.status
+    : activeLevel === 'volumes'
+      ? volumeProtection.status
+      : null
+  const activeDraftSavedAt = activeLevel === 'total'
+    ? outlineProtection.savedAt
+    : activeLevel === 'volumes'
+      ? volumeProtection.savedAt
+      : null
   const rollingChapters = chapters
     .slice(firstUnwrittenChapter < 0 ? chapters.length : firstUnwrittenChapter)
     .slice(0, 5)
@@ -82,23 +111,31 @@ export function OutlineDetailPage() {
     if (!Number.isInteger(id) || id <= 0) throw new Error('作品编号无效')
     const [value, project] = await Promise.all([api.getProjectOutline(id), api.getProject(id)])
     setOutline(value.outline || '')
+    setSavedOutline(value.outline || '')
     setDraft(value.outline || '')
     setProjectName(project.projectname || '作品大纲')
     const targetWords = String(project.expected_words || 1000000)
     setExpectedWords(targetWords)
     setSavedExpectedWords(targetWords)
+    setOutlineLoadedForProject(String(id))
   }, [projectId])
 
   useEffect(() => {
     const id = Number(projectId)
     if (!Number.isInteger(id) || id <= 0 || activeLevel === 'total') return
+    if (activeLevel === 'volumes' && volumesLoadedForProject === String(id)) return
     let cancelled = false
     setVolumeLoading(true)
+    if (activeLevel === 'volumes') setVolumesLoadedForProject(null)
     const load = activeLevel === 'volumes' ? api.getOutlineVolumes(id) : api.getProjectChapters(id)
     void load
       .then(value => {
         if (cancelled) return
-        if (activeLevel === 'volumes') setVolumes(value as OutlineVolume[])
+        if (activeLevel === 'volumes') {
+          setVolumes(value as OutlineVolume[])
+          setSavedVolumes(value as OutlineVolume[])
+          setVolumesLoadedForProject(String(id))
+        }
         else setChapters(value as Chapter[])
         setVolumeError('')
       })
@@ -111,7 +148,7 @@ export function OutlineDetailPage() {
     return () => {
       cancelled = true
     }
-  }, [activeLevel, projectId])
+  }, [activeLevel, projectId, volumesLoadedForProject])
 
   useEffect(() => {
     setLoading(true)
@@ -122,10 +159,14 @@ export function OutlineDetailPage() {
   }, [loadOutline])
 
   useEffect(() => {
-    if (feature === 'edit' || feature === 'generate') setEditing(true)
-    if (feature === 'generate' && !loading) setGenerationDialogOpen(true)
+    if (outlineProtection.recovery) {
+      setEditing(false)
+      setGenerationDialogOpen(false)
+    }
+    else if (feature === 'edit' || feature === 'generate') setEditing(true)
+    if (feature === 'generate' && !loading && !outlineProtection.recovery) setGenerationDialogOpen(true)
     if (feature === 'versions') setVersionsOpen(true)
-  }, [feature, loading])
+  }, [feature, loading, outlineProtection.recovery])
 
   const loadVersions = useCallback(async () => {
     const id = Number(projectId)
@@ -149,12 +190,14 @@ export function OutlineDetailPage() {
   async function restoreVersion(version: OutlineVersion) {
     const id = Number(projectId)
     if (!Number.isInteger(id) || id <= 0) return
-    if (!window.confirm(`确定恢复到第 ${version.version_number} 个版本吗？当前大纲会自动保存为新版本。`)) return
+    if (!window.confirm(`确定恢复到第 ${version.version_number} 个版本吗？当前大纲会自动保存为新版本，未保存的本地修改也会被覆盖。`)) return
     setRestoringVersion(version.id)
     try {
       const restored = await api.restoreOutlineVersion(id, version.id)
       setOutline(restored.outline || '')
+      setSavedOutline(restored.outline || '')
       setDraft(restored.outline || '')
+      outlineProtection.discardDraft()
       setEditing(false)
       setNotice(`已恢复第 ${version.version_number} 个大纲版本`)
       await loadVersions()
@@ -168,10 +211,18 @@ export function OutlineDetailPage() {
   async function restoreVolumeVersion(version: OutlineVolumeVersion) {
     const id = Number(projectId)
     if (!Number.isInteger(id) || id <= 0) return
-    if (!window.confirm(`确定恢复“${version.name}”的第 ${version.version_number} 个卷纲版本吗？`)) return
+    if (!window.confirm(`确定恢复“${version.name}”的第 ${version.version_number} 个卷纲版本吗？该卷纲的未保存修改也会被覆盖，其他卷的未保存修改会保留。`)) return
     setRestoringVersion(version.id)
     try {
-      await api.restoreOutlineVolumeVersion(id, version.id)
+      const restored = await api.restoreOutlineVolumeVersion(id, version.id)
+      const refreshed = await api.getOutlineVolumes(id)
+      setSavedVolumes(refreshed)
+      setVolumes(current =>
+        refreshed.map(serverVolume => {
+          if (serverVolume.id === restored.id) return serverVolume
+          return current.find(volume => volume.id === serverVolume.id) || serverVolume
+        }),
+      )
       setNotice(`已恢复“${version.name}”的第 ${version.version_number} 个卷纲版本`)
       await loadVersions()
     } catch (reason) {
@@ -204,10 +255,36 @@ export function OutlineDetailPage() {
   }
 
   function cancelEditing() {
+    if (outlineProtection.hasUnsavedChanges && !window.confirm('放弃当前大纲修改并删除本地暂存草稿吗？')) return
     setDraft(outline)
     setExpectedWords(savedExpectedWords)
     setEditing(false)
+    outlineProtection.discardDraft()
     setNotice('')
+  }
+
+  function restoreLocalOutlineDraft() {
+    const recovered = outlineProtection.recovery?.data
+    if (!recovered) return
+    setDraft(recovered.outline)
+    setExpectedWords(recovered.expectedWords)
+    setEditing(true)
+    outlineProtection.dismissRecovery()
+    setNotice('已恢复本地大纲草稿；保存修改后会同步到作品')
+  }
+
+  function restoreLocalVolumeDraft() {
+    const recovered = volumeProtection.recovery?.data
+    if (!recovered) return
+    setVolumes(recovered.volumes)
+    setVolumeEditing(Object.fromEntries(recovered.volumes.map(volume => [volume.id, true])))
+    if (recovered.newVolumeDraft) {
+      setNewVolumeDraft(recovered.newVolumeDraft)
+      setNewVolumeDraftDirty(true)
+      setNewVolumeDialogOpen(true)
+    }
+    volumeProtection.dismissRecovery()
+    setNotice('已恢复本地卷纲草稿；保存卷纲后会同步到作品')
   }
 
   async function saveOutline() {
@@ -222,9 +299,11 @@ export function OutlineDetailPage() {
     try {
       const saved = await api.updateProjectOutline(id, draft, words)
       setOutline(saved.outline || '')
+      setSavedOutline(saved.outline || '')
       setDraft(saved.outline || '')
       setSavedExpectedWords(String(words))
       setEditing(false)
+      outlineProtection.discardDraft()
       setNotice('大纲修改已保存')
     } catch (reason) {
       setNotice(reason instanceof Error ? reason.message : '大纲保存失败，请稍后重试')
@@ -234,6 +313,13 @@ export function OutlineDetailPage() {
   }
 
   async function generateOutline() {
+    if (outlineProtection.hasUnsavedChanges) {
+      if (!window.confirm('继续生成会替换当前未保存的大纲；系统会先尝试暂存当前内容。确定继续吗？')) return
+      if (!outlineProtection.persistNow()) {
+        setGenerationError('本地暂存失败，已取消生成以保护当前大纲。请先复制或保存当前内容后重试。')
+        return
+      }
+    }
     const id = Number(projectId)
     const words = Number(expectedWords)
     if (!Number.isInteger(words) || words <= 0 || words > 10000000) {
@@ -258,6 +344,7 @@ export function OutlineDetailPage() {
       setKnowledgeCitations(result.citations || [])
       setExpectedWords(String(result.expected_words || words))
       setSavedExpectedWords(String(result.expected_words || words))
+      outlineProtection.discardDraft()
       setNotice('大纲已生成，请检查后点击“保存修改”入库')
     } catch (reason) {
       setNotice(reason instanceof Error ? reason.message : '大纲生成失败，请稍后重试')
@@ -267,14 +354,23 @@ export function OutlineDetailPage() {
   }
 
   function openNewVolumeDialog() {
-    const nextNumber = volumes.reduce((max, volume) => Math.max(max, volume.volume_number), 0) + 1
-    setNewVolumeDraft({
-      volume_number: String(nextNumber),
-      name: `第${nextNumber}卷`,
-      outline: '',
-    })
+    if (!newVolumeDraftDirty) {
+      const nextNumber = volumes.reduce((max, volume) => Math.max(max, volume.volume_number), 0) + 1
+      setNewVolumeDraft({
+        volume_number: String(nextNumber),
+        name: `第${nextNumber}卷`,
+        outline: '',
+      })
+    }
     setVolumeError('')
     setNewVolumeDialogOpen(true)
+  }
+
+  function discardNewVolumeDraft() {
+    if (!window.confirm('确定丢弃尚未创建的新卷纲草稿吗？')) return
+    setNewVolumeDraft({ volume_number: '1', name: '', outline: '' })
+    setNewVolumeDraftDirty(false)
+    setNewVolumeDialogOpen(false)
   }
 
   async function addVolume() {
@@ -290,8 +386,12 @@ export function OutlineDetailPage() {
         name: newVolumeDraft.name.trim(),
         outline: newVolumeDraft.outline.trim(),
       })
-      setVolumes(current => [...current, created].sort((left, right) => left.volume_number - right.volume_number))
+      const nextVolumes = [...volumes, created].sort((left, right) => left.volume_number - right.volume_number)
+      setVolumes(nextVolumes)
+      setSavedVolumes(current => [...current, created].sort((left, right) => left.volume_number - right.volume_number))
       setVolumeEditing(current => ({ ...current, [created.id]: true }))
+      setNewVolumeDraft({ volume_number: String(volumeNumber + 1), name: '', outline: '' })
+      setNewVolumeDraftDirty(false)
       setNewVolumeDialogOpen(false)
       setNotice('卷纲单元已创建')
     } catch (reason) {
@@ -310,7 +410,16 @@ export function OutlineDetailPage() {
         outline: volume.outline,
       })
       const refreshed = await api.getOutlineVolumes(Number(projectId))
-      setVolumes(refreshed)
+      setSavedVolumes(refreshed)
+      setVolumes(current =>
+        current
+          .map(item => {
+            const latest = refreshed.find(candidate => candidate.id === item.id)
+            if (!latest) return item
+            return item.id === saved.id ? latest : { ...latest, name: item.name, outline: item.outline }
+          })
+          .sort((left, right) => left.volume_number - right.volume_number),
+      )
       setVolumeEditing(current => ({ ...current, [saved.id]: false }))
       setNotice(`${saved.name}已保存`)
     } catch (reason) {
@@ -321,6 +430,13 @@ export function OutlineDetailPage() {
   }
 
   async function generateVolume(volume: OutlineVolume) {
+    if (volumeProtection.hasUnsavedChanges) {
+      if (!window.confirm('继续生成会替换当前未保存的卷纲；系统会先尝试暂存当前内容。确定继续吗？')) return
+      if (!volumeProtection.persistNow()) {
+        setVolumeError('本地暂存失败，已取消生成以保护当前卷纲。请先复制或保存当前内容后重试。')
+        return
+      }
+    }
     setVolumeGenerating(volume.id)
     setVolumeError('')
     try {
@@ -348,7 +464,14 @@ export function OutlineDetailPage() {
       setVolumeError('请先设置有效的作品目标字数')
       return
     }
-    if (volumes.length > 0 && !window.confirm('智能分卷会替换现有所有卷纲及卷名，确定继续吗？')) {
+    if (
+      (volumes.length > 0 || volumeProtection.hasUnsavedChanges) &&
+      !window.confirm('智能分卷会替换当前卷纲；如有未保存修改，系统会先暂存到本地。确定继续吗？')
+    ) {
+      return
+    }
+    if (volumeProtection.hasUnsavedChanges && !volumeProtection.persistNow()) {
+      setVolumeError('本地暂存失败，已取消智能分卷以保护当前卷纲。请先复制或保存当前内容后重试。')
       return
     }
     setVolumePlanGenerating(true)
@@ -356,6 +479,8 @@ export function OutlineDetailPage() {
     try {
       const result = await api.generateOutlineVolumePlan(id, words, volumes.length > 0, knowledgeBaseIds)
       setVolumes(result.volumes)
+      setSavedVolumes(result.volumes)
+      volumeProtection.discardDraft()
       setVolumeEditing(Object.fromEntries(result.volumes.map(volume => [volume.id, false])))
       setKnowledgeCitations(result.citations || [])
       setNotice(`已按故事阶段生成并保存${result.volumes.length}卷卷纲`)
@@ -371,6 +496,7 @@ export function OutlineDetailPage() {
     try {
       await api.deleteOutlineVolume(Number(projectId), volume.id)
       setVolumes(current => current.filter(item => item.id !== volume.id))
+      setSavedVolumes(current => current.filter(item => item.id !== volume.id))
       setVolumeEditing(current => {
         const next = { ...current }
         delete next[volume.id]
@@ -634,7 +760,39 @@ export function OutlineDetailPage() {
               {notice}
             </div>
           )}
+          {outlineProtection.recovery && (
+            <DraftRecoveryBanner
+              savedAt={outlineProtection.recovery.savedAt}
+              onRestore={restoreLocalOutlineDraft}
+              onDiscard={() => {
+                outlineProtection.discardDraft()
+                setNotice('本地总纲草稿已丢弃')
+              }}
+            />
+          )}
+          {volumeProtection.recovery && (
+            <DraftRecoveryBanner
+              savedAt={volumeProtection.recovery.savedAt}
+              onRestore={() => {
+                setActiveLevel('volumes')
+                restoreLocalVolumeDraft()
+              }}
+              onDiscard={() => {
+                volumeProtection.discardDraft()
+                setNotice('本地卷纲草稿已丢弃')
+              }}
+            />
+          )}
           <div className="detail-page-toolbar">
+            {activeDraftStatus && (
+              <span className="local-draft-status" role="status">
+                {activeDraftStatus === 'saving'
+                  ? '正在暂存本地草稿…'
+                  : activeDraftStatus === 'saved'
+                    ? `本地草稿已暂存${activeDraftSavedAt ? ` · ${new Date(activeDraftSavedAt).toLocaleTimeString()}` : ''}`
+                    : '本地暂存不可用，请保存修改到作品'}
+              </span>
+            )}
             {editing && activeLevel === 'total' ? (
               <>
                 <button
@@ -657,7 +815,7 @@ export function OutlineDetailPage() {
                 </button>
               </>
             ) : activeLevel === 'total' ? (
-              <button className="primary-button" type="button" onClick={beginEditing}>
+              <button className="primary-button" type="button" onClick={beginEditing} disabled={Boolean(outlineProtection.recovery)}>
                 <Edit3 size={15} />
                 编辑总纲
               </button>
@@ -703,9 +861,11 @@ export function OutlineDetailPage() {
                   aria-selected={activeLevel === level}
                   key={level}
                   onClick={() => {
+                    if (outlineProtection.recovery || volumeProtection.recovery) return
                     if (editing && level !== 'total') cancelEditing()
                     setActiveLevel(level)
                   }}
+                  disabled={Boolean(outlineProtection.recovery || volumeProtection.recovery)}
                 >
                   {label}
                 </button>
@@ -756,7 +916,7 @@ export function OutlineDetailPage() {
                     type="button"
                     onClick={() => void generateVolumePlan()}
                     disabled={
-                      volumeLoading || volumePlanGenerating || volumeGenerating !== null || volumeSaving !== null
+                      volumeLoading || volumePlanGenerating || volumeGenerating !== null || volumeSaving !== null || Boolean(volumeProtection.recovery)
                     }
                   >
                     <Sparkles size={15} />
@@ -766,7 +926,7 @@ export function OutlineDetailPage() {
                     className="secondary-button"
                     type="button"
                     onClick={openNewVolumeDialog}
-                    disabled={volumeLoading || volumePlanGenerating || volumeSaving !== null}
+                    disabled={volumeLoading || volumePlanGenerating || volumeSaving !== null || Boolean(volumeProtection.recovery)}
                   >
                     <BookOpenText size={15} />
                     新建卷纲
@@ -802,7 +962,7 @@ export function OutlineDetailPage() {
                             className="secondary-button"
                             type="button"
                             onClick={() => setVolumeEditing(current => ({ ...current, [volume.id]: true }))}
-                            disabled={volumeGenerating !== null || volumeSaving !== null || volumePlanGenerating}
+                            disabled={volumeGenerating !== null || volumeSaving !== null || volumePlanGenerating || Boolean(volumeProtection.recovery)}
                           >
                             <Edit3 size={14} />
                             修改卷纲
@@ -985,7 +1145,10 @@ export function OutlineDetailPage() {
                     type="number"
                     min="1"
                     value={newVolumeDraft.volume_number}
-                    onChange={event => setNewVolumeDraft(current => ({ ...current, volume_number: event.target.value }))}
+                    onChange={event => {
+                      setNewVolumeDraftDirty(true)
+                      setNewVolumeDraft(current => ({ ...current, volume_number: event.target.value }))
+                    }}
                     aria-label="新卷序号"
                   />
                 </label>
@@ -993,7 +1156,10 @@ export function OutlineDetailPage() {
                   <span>卷名</span>
                   <input
                     value={newVolumeDraft.name}
-                    onChange={event => setNewVolumeDraft(current => ({ ...current, name: event.target.value }))}
+                    onChange={event => {
+                      setNewVolumeDraftDirty(true)
+                      setNewVolumeDraft(current => ({ ...current, name: event.target.value }))
+                    }}
                     maxLength={100}
                     aria-label="新卷名"
                   />
@@ -1004,7 +1170,10 @@ export function OutlineDetailPage() {
                 <textarea
                   rows={6}
                   value={newVolumeDraft.outline}
-                  onChange={event => setNewVolumeDraft(current => ({ ...current, outline: event.target.value }))}
+                  onChange={event => {
+                    setNewVolumeDraftDirty(true)
+                    setNewVolumeDraft(current => ({ ...current, outline: event.target.value }))
+                  }}
                   maxLength={100000}
                   aria-label="新卷卷纲"
                   placeholder="可以先填写卷纲，也可以创建后再编辑。"
@@ -1012,7 +1181,12 @@ export function OutlineDetailPage() {
               </label>
               {volumeError && <p className="form-message error" role="alert">{volumeError}</p>}
               <div className="modal-actions">
-                <button className="secondary-button" type="button" onClick={() => setNewVolumeDialogOpen(false)} disabled={volumeSaving !== null}>取消</button>
+                <button className="secondary-button" type="button" onClick={() => setNewVolumeDialogOpen(false)} disabled={volumeSaving !== null}>暂存并关闭</button>
+                {newVolumeDraftDirty && (
+                  <button className="secondary-button danger-button" type="button" onClick={discardNewVolumeDraft} disabled={volumeSaving !== null}>
+                    丢弃草稿
+                  </button>
+                )}
                 <button className="primary-button" type="button" onClick={() => void addVolume()} disabled={volumeSaving !== null}>
                   {volumeSaving === -1 ? '创建中…' : '确认创建'}
                 </button>

@@ -33,6 +33,7 @@ const chapter: Chapter = {
 
 beforeEach(() => {
   vi.resetAllMocks()
+  window.localStorage.clear()
   vi.mocked(api.getChapter).mockResolvedValue(chapter)
   vi.mocked(api.updateChapter).mockResolvedValue({
     ...chapter,
@@ -100,6 +101,33 @@ describe('章节详情页', () => {
     })
     expect(await screen.findByRole('button', { name: '编辑章节' })).toBeTruthy()
     expect(screen.getByText('修订后的内容')).toBeTruthy()
+  })
+
+  it('重新打开章节时可以恢复自动暂存的正文并保存到作品', async () => {
+    window.localStorage.setItem(
+      'novel-agent:draft:chapter:12:8',
+      JSON.stringify({
+        version: 1,
+        savedAt: '2026-10-29T10:00:00.000Z',
+        data: {
+          draft: { chapter_number: '1', chaptername: '启航', content: '恢复的正文草稿' },
+          planDraft: { objective: '', conflict: '', key_events: '', ending_hook: '', expected_words: 3000 },
+          planTextDraft: '',
+          summaryDraft: '',
+          memoryDraft: null,
+          pendingVolumeProgress: null,
+        },
+      }),
+    )
+    renderPage()
+
+    expect(await screen.findByText('发现未同步到作品的本地草稿')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: '恢复草稿' }))
+    expect((screen.getByLabelText('章节内容') as HTMLTextAreaElement).value).toBe('恢复的正文草稿')
+    await userEvent.click(screen.getByRole('button', { name: '保存修改' }))
+
+    expect(api.updateChapter).toHaveBeenCalledWith(12, 8, expect.objectContaining({ content: '恢复的正文草稿' }))
+    expect(await screen.findByRole('button', { name: '编辑章节' })).toBeTruthy()
   })
 
   it('编辑时只显示一个细纲输入框，没有细纲时保持空白', async () => {

@@ -66,7 +66,7 @@ describe('独立回收站 API', () => {
 
   it('智能生成卷纲和滚动细纲不要求前端提交名称', async () => {
     await api.generateOutlineVolume(12, 7, '突出卷末反转', [3])
-    let [, volumeOptions] = vi.mocked(fetch).mock.calls[0]
+    const [, volumeOptions] = vi.mocked(fetch).mock.calls[0]
     expect(JSON.parse(String(volumeOptions?.body))).toEqual({ user_idea: '突出卷末反转', knowledge_base_ids: [3] })
 
     vi.mocked(fetch).mockClear()

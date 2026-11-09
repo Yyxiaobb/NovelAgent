@@ -34,6 +34,7 @@ vi.mock('../api/client', () => ({
 
 beforeEach(() => {
   vi.resetAllMocks()
+  window.localStorage.clear()
   vi.mocked(api.getProjectOutline).mockResolvedValue({ project_id: 12, outline: '旧大纲' })
   vi.mocked(api.getProject).mockResolvedValue({
     id: 12,
@@ -60,7 +61,7 @@ beforeEach(() => {
   vi.mocked(api.restoreOutlineVersion).mockResolvedValue({ project_id: 12, outline: '恢复的大纲' })
   vi.mocked(api.getOutlineVolumeVersions).mockResolvedValue([])
   vi.mocked(api.restoreOutlineVolumeVersion).mockResolvedValue({
-    id: 21, project_id: 12, volume_number: 1, name: '第一卷', expected_words: 250000,
+    id: 21, project_id: 12, volume_number: 1, name: '第一卷',
     start_chapter: 1, end_chapter: 80, outline: '卷纲', created_at: '2026-10-17T09:00:00',
     updated_at: '2026-10-17T10:00:00',
   })
@@ -132,7 +133,6 @@ beforeEach(() => {
         project_id: 12,
         volume_number: 1,
         name: '第一卷：星港启程',
-        expected_words: 150000,
         start_chapter: 1,
         end_chapter: 50,
         outline: '主角离开星港，发现贯穿全书的异常信号。',
@@ -169,6 +169,57 @@ describe('大纲详情页', () => {
     expect(api.updateProjectOutline).toHaveBeenCalledWith(12, '新大纲', 180000)
     expect(await screen.findByRole('button', { name: '编辑总纲' })).toBeTruthy()
     expect(screen.getByText('新大纲')).toBeTruthy()
+  })
+
+  it('重新打开大纲页时可以恢复并保存自动暂存的总纲', async () => {
+    window.localStorage.setItem(
+      'novel-agent:draft:outline:12',
+      JSON.stringify({
+        version: 1,
+        savedAt: '2026-10-29T10:00:00.000Z',
+        data: { outline: '恢复的总纲草稿', expectedWords: '180000' },
+      }),
+    )
+    renderOutline()
+
+    expect(await screen.findByText('发现未同步到作品的本地草稿')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: '恢复草稿' }))
+    expect((screen.getByLabelText('作品大纲') as HTMLTextAreaElement).value).toBe('恢复的总纲草稿')
+    expect((screen.getByLabelText('作品目标字数') as HTMLInputElement).value).toBe('180000')
+    await userEvent.click(screen.getByRole('button', { name: '保存修改' }))
+
+    expect(api.updateProjectOutline).toHaveBeenCalledWith(12, '恢复的总纲草稿', 180000)
+  })
+
+  it('卷纲本地草稿可从恢复提示恢复到编辑器', async () => {
+    const volume = {
+      id: 2,
+      project_id: 12,
+      volume_number: 1,
+      name: '第一卷',
+      start_chapter: 1,
+      end_chapter: 80,
+      outline: '服务器卷纲',
+      created_at: '2026-10-17T09:00:00',
+      updated_at: '2026-10-17T10:00:00',
+    }
+    vi.mocked(api.getOutlineVolumes).mockResolvedValue([volume])
+    window.localStorage.setItem(
+      'novel-agent:draft:outline-volumes:12',
+      JSON.stringify({
+        version: 1,
+        savedAt: '2026-10-29T10:00:00.000Z',
+        data: { volumes: [{ ...volume, outline: '恢复的卷纲草稿' }], newVolumeDraft: null },
+      }),
+    )
+    renderOutline()
+
+    await screen.findByText('旧大纲')
+    await userEvent.click(screen.getByRole('tab', { name: '卷纲' }))
+    expect(await screen.findByText('发现未同步到作品的本地草稿')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: '恢复草稿' }))
+    expect((await screen.findByLabelText('第一卷卷纲'))).toHaveProperty('value', '恢复的卷纲草稿')
+    expect(screen.getByLabelText('第一卷卷纲')).toHaveProperty('disabled', false)
   })
 
   it('编辑目标字数，智能生成使用该字数并将流式结果写入大纲编辑框', async () => {
@@ -266,7 +317,6 @@ describe('大纲详情页', () => {
       project_id: 12,
       volume_number: 1,
       name: '第一卷',
-      expected_words: 250000,
       start_chapter: null,
       end_chapter: null,
       outline: '',
@@ -294,7 +344,6 @@ describe('大纲详情页', () => {
         project_id: 12,
         volume_number: 1,
         name: '第一卷',
-        expected_words: 250000,
         start_chapter: 1,
         end_chapter: 80,
         outline: '主角离开故乡，发现第一条线索。',
@@ -337,7 +386,6 @@ describe('大纲详情页', () => {
       project_id: 12,
       volume_number: 1,
       name: '第一卷',
-      expected_words: 250000,
       start_chapter: 1,
       end_chapter: 80,
       outline: '主角离开故乡，发现第一条线索。',

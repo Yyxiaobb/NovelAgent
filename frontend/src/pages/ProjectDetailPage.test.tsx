@@ -127,7 +127,6 @@ describe('作品详情页', () => {
       project_id: project.id,
       volume_number: 1,
       name: '星海启程',
-      expected_words: 200000,
       start_chapter: 1,
       end_chapter: 20,
       outline: '离开故乡',

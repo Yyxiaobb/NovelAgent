@@ -70,7 +70,6 @@ export interface OutlineVolume {
   project_id: number
   volume_number: number
   name: string
-  expected_words?: number
   start_chapter?: number | null
   end_chapter?: number | null
   outline: string | null
@@ -228,7 +227,6 @@ export interface OutlineVolumeVersion {
   source: string
   volume_number: number
   name: string
-  expected_words: number
   start_chapter: number | null
   end_chapter: number | null
   outline: string | null

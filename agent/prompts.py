@@ -108,20 +108,20 @@ PROMPTS: dict[str, PromptTemplate] = {
     ),
     "project_outline": PromptTemplate(
         id="project_outline",
-        version="1.0.0",
+        version="1.1.0",
         system="你是长篇小说策划编辑。你输出的内容将作为小说大纲保存，请严格遵守用户作品资料和格式要求。",
         task_template=(
             "请根据以下作品资料创作一份可用于后续分章写作的完整故事大纲。\n"
             "作品类型：{project_type}\n作品简介：{project_introduction}\n"
             "【用户明确要求】\n<user_request>\n{user_idea}\n</user_request>\n"
             "【已有灵感，仅作为创作参考】\n{inspiration_context}\n"
-            "整部作品目标总字数：约 {expected_words} 字"
-            "（仅用于规划分卷、节奏和情节体量，不是要求输出同等字数的大纲）\n\n"
+            "整部作品参考篇幅：约 {expected_words} 字"
+            "（仅用于把握全书整体规模和节奏，不是硬性上限；不要求按卷分配字数或让各卷合计达到该数值，后续正文可以超过。）\n\n"
             "要求：\n"
             "1. 优先级为：作品资料和既有设定 > 用户明确要求 > 已有灵感 > 知识库参考资料；发生冲突时按此顺序处理。\n"
             "2. 大纲符合作品类型和简介，不擅自更改核心设定；补全必要的人物目标、冲突和世界规则。\n"
             "3. 以清晰标题组织：核心设定、主要人物、故事主线、分卷/阶段规划、关键转折与结局。\n"
-            "4. 分卷/阶段数量和每阶段情节体量要匹配目标字数；给出建议卷数及每卷大致字数。\n"
+            "4. 按故事发展安排分卷/阶段数量、情节体量和节奏；不要为每卷分配字数，也不要要求各卷字数合计达到参考篇幅。\n"
             "5. 情节具体、前后连贯，明确人物变化、主要悬念及其回收，避免空泛套话。\n"
             "6. 这是一份全书总纲，控制在 1000–3000 字；只写方向性蓝图，不拆章、不写细纲。\n"
             "7. 大纲是写作规划，不是小说正文；优先保留关键设定、人物目标、主线冲突、阶段节点和结局。\n"
@@ -130,7 +130,7 @@ PROMPTS: dict[str, PromptTemplate] = {
     ),
     "outline_volume_planner": PromptTemplate(
         id="outline_volume_planner",
-        version="1.0.0",
+        version="1.1.0",
         system=(
             "你是长篇小说结构规划 Agent 的 Planner。先将全书主线拆为阶段清晰、篇幅合适的分卷计划。"
             "你只返回合法 JSON，不要 Markdown 或解释。"
@@ -138,7 +138,8 @@ PROMPTS: dict[str, PromptTemplate] = {
         task_template=(
             "请根据作品总纲规划分卷执行方案；本阶段只规划，不写完整卷纲。\n"
             "作品类型：{project_type}\n作品简介：{project_introduction}\n"
-            "全书目标总字数：{expected_words} 字\n全书总纲：\n{project_outline}\n"
+            "全书参考篇幅：{expected_words} 字（仅供整体规模规划参考，不是硬性上限；不要求按卷分配或合计匹配，后续正文可以超过。）\n"
+            "全书总纲：\n{project_outline}\n"
             "补充要求：{user_idea}\n\n"
             "分卷要求：\n"
             "1. 按故事主线的阶段目标、重大转折和冲突闭环确定卷数，不预设每卷字数或章节范围。\n"
@@ -152,7 +153,7 @@ PROMPTS: dict[str, PromptTemplate] = {
     ),
     "outline_volume_executor": PromptTemplate(
         id="outline_volume_executor",
-        version="1.0.0",
+        version="1.1.0",
         system=(
             "你是长篇小说卷纲撰写 Agent 的 Executor。严格依据 Planner 的分卷计划扩写指定卷纲，"
             "保持全书设定、事件因果和跨卷连续性；只输出中文卷纲正文。"
@@ -160,7 +161,8 @@ PROMPTS: dict[str, PromptTemplate] = {
         task_template=(
             "请执行分卷计划，撰写指定卷的详细卷纲。\n"
             "作品类型：{project_type}\n作品简介：{project_introduction}\n"
-            "全书目标字数：{expected_words} 字\n全书总纲：\n{project_outline}\n\n"
+            "全书参考篇幅：{expected_words} 字（仅供把握整体规模，不是本卷字数配额或硬性上限；不要求各卷合计匹配，后续正文可以超过。）\n"
+            "全书总纲：\n{project_outline}\n\n"
             "Planner 的完整分卷计划：\n{volume_plan}\n\n"
             "当前执行任务：\n{current_volume}\n\n"
             "前序卷已生成卷纲（用于保持连续性）：\n{previous_volumes}\n"

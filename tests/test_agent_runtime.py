@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 from agent.runtime import _execute, run_agent
 from agent.skills import load_skill
 from agent.prompts import PROMPTS, get_prompt_template, render_prompt
+from schemas.agent import OutlineVolumePlanItem
 
 
 def _response(*, content=None, tool_calls=None):
@@ -121,6 +122,30 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(template.task_template)
 
     def test_outline_volume_agent_prompts_plan_and_execute_from_full_book_outline(self):
+        outline_template, outline_prompt = render_prompt(
+            "project_outline",
+            project_type="科幻",
+            project_introduction="一段星际旅程",
+            expected_words=1000000,
+            user_idea="重点描写人物成长",
+            inspiration_context="无",
+        )
+        self.assertEqual(outline_template.version, "1.1.0")
+        self.assertIn("仅用于把握全书整体规模和节奏", outline_prompt)
+        self.assertIn("后续正文可以超过", outline_prompt)
+        self.assertNotIn("每卷大致字数", outline_prompt)
+
+        planned_volume = OutlineVolumePlanItem.model_validate({
+            "name": "第一卷：启程",
+            "expected_words": 250000,
+            "stage_goal": "主角离开故乡",
+            "central_conflict": "追踪异常信号",
+            "key_events": ["发现信号", "结识同伴", "踏上旅程"],
+            "character_arc": "从犹豫转为主动",
+            "ending_hook": "信号来自熟悉之人",
+        })
+        self.assertNotIn("expected_words", planned_volume.model_dump())
+
         template, prompt = render_prompt(
             "outline_volume_planner",
             project_type="科幻",
@@ -129,11 +154,13 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             project_outline="主角追查异常信号，最终发现宇宙循环的真相。",
             user_idea="重点描写人物成长",
         )
-        self.assertEqual(template.version, "1.0.0")
-        self.assertIn("全书目标总字数：1000000 字", prompt)
+        self.assertEqual(template.version, "1.1.0")
+        self.assertIn("全书参考篇幅：1000000 字", prompt)
+        self.assertIn("不是硬性上限", prompt)
+        self.assertIn("不要求按卷分配或合计匹配", prompt)
         self.assertIn("宇宙循环的真相", prompt)
-        self.assertIn("各卷字数之和必须等于全书目标字数", prompt)
         self.assertIn('"volumes"', prompt)
+        self.assertNotIn("每卷大致字数", prompt)
 
         executor, execution_prompt = render_prompt(
             "outline_volume_executor",
@@ -149,6 +176,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Planner 的完整分卷计划", execution_prompt)
         self.assertIn("当前执行任务", execution_prompt)
         self.assertIn("前序卷已生成卷纲", execution_prompt)
+        self.assertIn("不是本卷字数配额或硬性上限", execution_prompt)
+        self.assertIn("后续正文可以超过", execution_prompt)
         self.assertNotIn("星河归途", prompt + execution_prompt)
         self.assertEqual(executor.id, "outline_volume_executor")
 

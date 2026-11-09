@@ -61,7 +61,6 @@ const volume: RecycledOutlineVolume = {
   project_id: novel.id,
   volume_number: 2,
   name: '第二卷：回声',
-  expected_words: 120000,
   start_chapter: 41,
   end_chapter: 80,
   outline: '主角追查信号来源。',

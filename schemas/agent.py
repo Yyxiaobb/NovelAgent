@@ -39,7 +39,6 @@ class OutlineVolumePlanGenerationRequest(BaseModel):
 
 class OutlineVolumePlanItem(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    expected_words: Optional[int] = Field(None, gt=0, le=10000000)
     stage_goal: str = Field(..., min_length=1, max_length=2000)
     central_conflict: str = Field(..., min_length=1, max_length=2000)
     key_events: list[str] = Field(..., min_length=3, max_length=6)

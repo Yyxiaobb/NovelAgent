@@ -116,11 +116,11 @@ class ProjectRecycleBinTests(RecycleBinTestCase):
         project_id = await self.seed_project()
         created = await self.client.post(
             f"/api/project/{project_id}/outline/volumes",
-            json={"name": "第一卷：启程", "expected_words": 250000, "start_chapter": 1, "end_chapter": 80,
+            json={"name": "第一卷：启程", "start_chapter": 1, "end_chapter": 80,
                   "outline": "主角离开故乡并发现线索。"},
         )
         self.assertEqual(created.status_code, 200)
-        self.assertEqual(created.json()["data"]["word_count"], 4)
+        self.assertNotIn("expected_words", created.json()["data"])
         volume = created.json()["data"]
         self.assertEqual(volume["volume_number"], 1)
         listed = await self.client.get(f"/api/project/{project_id}/outline/volumes")
@@ -128,11 +128,11 @@ class ProjectRecycleBinTests(RecycleBinTestCase):
 
         updated = await self.client.put(
             f"/api/project/{project_id}/outline/volumes/{volume['id']}",
-            json={"name": "第一卷：信号", "expected_words": 240000, "start_chapter": 1, "end_chapter": 75,
+            json={"name": "第一卷：信号", "start_chapter": 1, "end_chapter": 75,
                   "outline": "主角发现来自远方的信号。"},
         )
         self.assertEqual(updated.status_code, 200)
-        self.assertEqual(updated.json()["data"]["word_count"], 9)
+        self.assertNotIn("expected_words", updated.json()["data"])
         self.assertEqual(updated.json()["data"]["outline"], "主角发现来自远方的信号。")
 
         outsider = await self.client.get(f"/api/project/{project_id + 99}/outline/volumes")
@@ -1021,10 +1021,39 @@ class ProjectEditingTests(RecycleBinTestCase):
         prompt = client.achat.await_args.args[0][1]["content"]
         self.assertIn("作品类型：科幻", prompt)
         self.assertIn("约 120000 字", prompt)
+        self.assertIn("不是硬性上限", prompt)
+        self.assertIn("不要为每卷分配字数", prompt)
         self.assertIn("双主角视角，结局温暖", prompt)
         self.assertNotIn("星河归途", prompt)
         async with self.sessions() as session:
             self.assertEqual((await session.get(Project, project_id)).expected_words, 120000)
+
+    async def test_generate_single_volume_uses_work_target_as_nonbinding_reference(self):
+        project_id = await self.seed_project(chapter_count=0)
+        async with self.sessions() as session:
+            project = await session.get(Project, project_id)
+            project.expected_words = 640000
+            project.outline = "主角追查异常信号，最终发现宇宙循环的真相。"
+            volume = OutlineVolume(project_id=project_id, volume_number=1, name="第一卷")
+            session.add(volume)
+            await session.flush()
+            volume_id = volume.id
+            await session.commit()
+
+        with patch("services.generation_runtime.LLMClient") as llm_class:
+            client = llm_class.return_value.__aenter__.return_value
+            client.achat = AsyncMock(return_value="阶段目标、核心冲突和卷末钩子。")
+            response = await self.client.post(
+                f"/api/agent/projects/{project_id}/outline/volumes/{volume_id}/generate",
+                json={},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        prompt = client.achat.await_args.args[0][1]["content"]
+        self.assertIn("全书参考篇幅：约 640000 字", prompt)
+        self.assertIn("不是本卷字数配额或硬性上限", prompt)
+        self.assertIn("后续正文可以超过", prompt)
+        self.assertIn("本卷推进没有预设字数或章节范围", prompt)
 
     async def test_generate_outline_rejects_invalid_word_count_and_missing_project(self):
         project_id = await self.seed_project(chapter_count=0)

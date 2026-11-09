@@ -207,7 +207,6 @@ async def create_outline_volume(db: AsyncSession, project_id: int, payload):
         project_id=project_id,
         volume_number=volume_number,
         name=payload.name,
-        expected_words=payload.expected_words or 250000,
         start_chapter=payload.start_chapter,
         end_chapter=payload.end_chapter,
         outline=payload.outline,
@@ -235,7 +234,7 @@ async def update_outline_volume(db: AsyncSession, project_id: int, volume_id: in
     for field in ("name", "outline"):
         if field in payload.model_fields_set:
             setattr(volume, field, getattr(payload, field))
-    for field in ("expected_words", "start_chapter", "end_chapter"):
+    for field in ("start_chapter", "end_chapter"):
         value = getattr(payload, field)
         if field in payload.model_fields_set and value is not None:
             setattr(volume, field, value)

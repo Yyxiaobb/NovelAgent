@@ -14,6 +14,8 @@ class OutlineVolume(Base):
     project_id: Mapped[int] = mapped_column(Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False, index=True)
     volume_number: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Retained for compatibility with existing rows; generation uses only the
+    # work-level reference and never treats this legacy value as a quota.
     expected_words: Mapped[int] = mapped_column(Integer, nullable=False, default=250000)
     start_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
     end_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)

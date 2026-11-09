@@ -654,6 +654,7 @@ async def generate_outline_volume(
     prompt = (
         f"请根据作品设定编写第{volume.volume_number}卷的卷纲。\n"
         f"类型：{project.project_type or '未指定'}\n简介：{project.introduction or '未提供'}\n"
+        f"全书参考篇幅：约 {project.expected_words or '未设置'} 字（仅供把握整体规模，不是本卷字数配额或硬性上限；后续正文可以超过。）\n"
         f"全书总纲：\n{(project.outline or '未提供')[:10000]}\n"
         f"上一卷卷纲（用于承接情节）：\n{previous_volume_context}\n"
         "本卷推进没有预设字数或章节范围；按卷纲中的阶段目标和事件因果展开。\n"

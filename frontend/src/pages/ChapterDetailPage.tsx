@@ -16,6 +16,8 @@ import { api } from '../api/client'
 import type { Chapter, ChapterMemory, ChapterPlan, ChapterVersion, GenerationJob, KnowledgeCitation } from '../types'
 import { KnowledgeBaseSelector } from '../components/KnowledgeBaseSelector'
 import { KnowledgeCitationList } from '../components/KnowledgeCitationList'
+import { DraftRecoveryBanner } from '../components/DraftRecoveryBanner'
+import { useDraftProtection } from '../hooks/useDraftProtection'
 
 function formatChapterPlan(plan?: ChapterPlan | null) {
   if (!plan) return ''
@@ -72,6 +74,7 @@ export function ChapterDetailPage() {
   const navigate = useNavigate()
   const { state: routeState } = location
   const [chapter, setChapter] = useState<Chapter | null>(null)
+  const [loadedChapterKey, setLoadedChapterKey] = useState<string | null>(null)
   const [draft, setDraft] = useState({ chapter_number: '', chaptername: '', content: '' })
   const [planDraft, setPlanDraft] = useState<ChapterPlan>({
     objective: '',
@@ -114,6 +117,27 @@ export function ChapterDetailPage() {
     note: string | null
   } | null>(null)
 
+  const chapterDraft = { draft, planDraft, planTextDraft, summaryDraft, memoryDraft, pendingVolumeProgress }
+  const savedChapterDraft = {
+    draft: {
+      chapter_number: chapter ? String(chapter.chapter_number) : '',
+      chaptername: chapter?.chaptername || '',
+      content: chapter?.content || '',
+    },
+    planDraft: chapter?.plan || { objective: '', conflict: '', key_events: '', ending_hook: '', expected_words: 3000 },
+    planTextDraft: formatChapterPlan(chapter?.plan),
+    summaryDraft: chapter?.summary || '',
+    memoryDraft: chapter?.memory || null,
+    pendingVolumeProgress: null,
+  }
+  const draftProtection = useDraftProtection(
+    projectId && chapterId ? `novel-agent:draft:chapter:${projectId}:${chapterId}` : null,
+    chapterDraft,
+    savedChapterDraft,
+    Boolean(chapter && loadedChapterKey === `${projectId}:${chapterId}` && !loading),
+    editing,
+  )
+
   const loadChapter = useCallback(async () => {
     const project = Number(projectId)
     const id = Number(chapterId)
@@ -135,16 +159,24 @@ export function ChapterDetailPage() {
 
   useEffect(() => {
     setLoading(true)
+    setLoadedChapterKey(null)
     setError('')
     void loadChapter()
+      .then(() => setLoadedChapterKey(`${projectId}:${chapterId}`))
       .catch(reason => setError(reason instanceof Error ? reason.message : '章节加载失败，请稍后重试'))
       .finally(() => setLoading(false))
-  }, [loadChapter])
+  }, [chapterId, loadChapter, projectId])
 
   useEffect(() => {
-    if (feature === 'edit' || feature === 'plan' || feature === 'generate') setEditing(true)
+    if (draftProtection.recovery) {
+      if (feature === 'edit' || feature === 'plan' || feature === 'generate') setEditing(false)
+      setPlanGenerationOpen(false)
+      setGenerationDialogOpen(false)
+    } else if (feature === 'edit' || feature === 'plan' || feature === 'generate') {
+      setEditing(true)
+    }
     const restoreState = routeState as { generatedContent?: string; plan?: ChapterPlan | null } | null
-    if (feature === 'edit' && restoreState?.generatedContent) {
+    if (!draftProtection.recovery && feature === 'edit' && restoreState?.generatedContent) {
       setEditing(true)
       setDraft(current => ({ ...current, content: restoreState.generatedContent || '' }))
       if (restoreState.plan) {
@@ -152,11 +184,11 @@ export function ChapterDetailPage() {
         setPlanTextDraft(formatChapterPlan(restoreState.plan))
       }
     }
-    if (feature === 'plan' && !loading) setPlanGenerationOpen(true)
-    if (feature === 'generate' && !loading) setGenerationDialogOpen(true)
+    if (!draftProtection.recovery && feature === 'plan' && !loading) setPlanGenerationOpen(true)
+    if (!draftProtection.recovery && feature === 'generate' && !loading) setGenerationDialogOpen(true)
     if (feature === 'history') setHistoryOpen(true)
     if (feature === 'versions') setVersionsOpen(true)
-  }, [feature, loading, routeState])
+  }, [draftProtection.recovery, feature, loading, routeState])
 
   const loadGenerationJobs = useCallback(async () => {
     if (!chapter) return
@@ -248,7 +280,7 @@ export function ChapterDetailPage() {
       }
     ).restoreChapterVersion
     if (typeof restore !== 'function' || !chapter) return
-    if (!window.confirm(`确定恢复到第 ${version.version_number} 个版本吗？当前内容会自动保存为新版本。`)) return
+    if (!window.confirm(`确定恢复到第 ${version.version_number} 个版本吗？当前内容会自动保存为新版本，未保存的本地修改也会被覆盖。`)) return
     setRestoringVersion(version.id)
     try {
       const restored = await restore(chapter.project_id, chapter.id, version.id)
@@ -265,6 +297,7 @@ export function ChapterDetailPage() {
       setSummaryDraft(restored.summary || '')
       setMemoryDraft(restored.memory || null)
       setEditing(false)
+      draftProtection.discardDraft()
       setNotice(`已恢复第 ${version.version_number} 个版本`)
       await loadVersions()
     } catch (reason) {
@@ -290,6 +323,7 @@ export function ChapterDetailPage() {
   }
 
   function cancelEditing() {
+    if (draftProtection.hasUnsavedChanges && !window.confirm('放弃当前修改并删除本地暂存草稿吗？')) return
     if (chapter) {
       setDraft({
         chapter_number: String(chapter.chapter_number),
@@ -304,7 +338,22 @@ export function ChapterDetailPage() {
       setMemoryDraft(chapter.memory || null)
     }
     setEditing(false)
+    draftProtection.discardDraft()
     setNotice('')
+  }
+
+  function restoreLocalDraft() {
+    const recovered = draftProtection.recovery?.data
+    if (!recovered) return
+    setDraft(recovered.draft)
+    setPlanDraft(recovered.planDraft)
+    setPlanTextDraft(recovered.planTextDraft)
+    setSummaryDraft(recovered.summaryDraft)
+    setMemoryDraft(recovered.memoryDraft)
+    setPendingVolumeProgress(recovered.pendingVolumeProgress)
+    setEditing(true)
+    draftProtection.dismissRecovery()
+    setNotice('已恢复本地草稿；保存修改后会同步到作品')
   }
 
   async function saveChapter() {
@@ -348,6 +397,7 @@ export function ChapterDetailPage() {
       setSummaryDraft(updated.summary || summaryDraft)
       setMemoryDraft(updated.memory || memoryDraft)
       setEditing(false)
+      draftProtection.discardDraft()
       setNotice(
         pendingVolumeProgress?.complete
           ? '章节已保存，模型判断本卷目标已完成；后续细纲将进入下一卷。'
@@ -364,6 +414,13 @@ export function ChapterDetailPage() {
 
   async function generateChapterPlan() {
     if (!chapter) return
+    if (planTextDraft !== formatChapterPlan(chapter.plan)) {
+      if (!window.confirm('生成新细纲会替换当前未保存的细纲；系统会先尝试暂存当前内容。确定继续吗？')) return
+      if (!draftProtection.persistNow()) {
+        setGenerationError('本地暂存失败，已取消生成以保护当前修改。请先复制或保存当前内容后重试。')
+        return
+      }
+    }
     const words = Number(planDraft.expected_words)
     if (!Number.isInteger(words) || words <= 0 || words > 100000) {
       setGenerationError('请输入 1 到 100000 之间的本章目标字数')
@@ -398,6 +455,13 @@ export function ChapterDetailPage() {
 
   async function generateChapterContent() {
     if (!chapter) return
+    if (draft.content !== (chapter.content || '')) {
+      if (!window.confirm('生成正文会替换当前未保存的正文；系统会先尝试暂存当前内容。确定继续吗？')) return
+      if (!draftProtection.persistNow()) {
+        setGenerationError('本地暂存失败，已取消生成以保护当前正文。请先复制或保存当前内容后重试。')
+        return
+      }
+    }
     const words = Number(planDraft.expected_words)
     if (!Number.isInteger(words) || words <= 0 || words > 100000) {
       setGenerationError('请输入 1 到 100000 之间的本章目标字数')
@@ -734,7 +798,26 @@ export function ChapterDetailPage() {
               {notice}
             </div>
           )}
+          {draftProtection.recovery && (
+            <DraftRecoveryBanner
+              savedAt={draftProtection.recovery.savedAt}
+              onRestore={restoreLocalDraft}
+              onDiscard={() => {
+                draftProtection.discardDraft()
+                setNotice('本地草稿已丢弃')
+              }}
+            />
+          )}
           <div className="detail-page-toolbar">
+            {draftProtection.status && (
+              <span className="local-draft-status" role="status">
+                {draftProtection.status === 'saving'
+                  ? '正在暂存本地草稿…'
+                  : draftProtection.status === 'saved'
+                    ? `本地草稿已暂存${draftProtection.savedAt ? ` · ${new Date(draftProtection.savedAt).toLocaleTimeString()}` : ''}`
+                    : '本地暂存不可用，请保存修改到作品'}
+              </span>
+            )}
             {editing ? (
               <>
                 <button
@@ -757,7 +840,12 @@ export function ChapterDetailPage() {
                 </button>
               </>
             ) : (
-              <button className="primary-button" type="button" onClick={beginEditing}>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={beginEditing}
+                disabled={Boolean(draftProtection.recovery)}
+              >
                 <Edit3 size={15} />
                 编辑章节
               </button>

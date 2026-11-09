@@ -53,7 +53,6 @@ class OutlineInfo(BaseModel):
 class OutlineVolumeRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     volume_number: Optional[int] = Field(None, gt=0)
-    expected_words: Optional[int] = Field(None, gt=0, le=10000000)
     start_chapter: Optional[int] = Field(None, gt=0)
     end_chapter: Optional[int] = Field(None, gt=0)
     outline: Optional[str] = Field(None, max_length=100000)
@@ -97,7 +96,6 @@ class OutlineVolumeVersionInfo(BaseModel):
     source: str
     volume_number: int
     name: str
-    expected_words: int
     start_chapter: Optional[int] = None
     end_chapter: Optional[int] = None
     outline: Optional[str] = None
