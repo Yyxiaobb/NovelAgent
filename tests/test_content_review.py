@@ -103,6 +103,32 @@ class ContentReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0][1], None)
         self.assertEqual(calls[1][1], 70)
 
+    async def test_loop_reports_each_review_iteration_to_persistence_callback(self):
+        client = SimpleNamespace(
+            model="review-model",
+            achat=AsyncMock(side_effect=[self.review_json(90, stop=True)]),
+        )
+
+        @asynccontextmanager
+        async def factory():
+            yield client
+
+        persisted = []
+
+        async def on_iteration(iteration):
+            persisted.append(iteration.as_dict())
+
+        async def candidate(_client, previous, review):
+            return self.content
+
+        result = await run_review_loop(
+            self.context, factory, candidate,
+            lambda value: validate_content_quality(value, 3000),
+            max_rounds=2, accept_score=85, on_iteration=on_iteration,
+        )
+        self.assertEqual(result.stop_reason, "threshold_reached")
+        self.assertEqual([item["round"] for item in persisted], [1])
+
 
 if __name__ == "__main__":
     unittest.main()

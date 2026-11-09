@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from dotenv import load_dotenv
+
 from agent.prompts import render_prompt
 from schemas.agent import ContentReview
 
@@ -60,11 +62,13 @@ class ReviewLoopResult:
 
 
 def review_enabled() -> bool:
+    load_dotenv(override=False)
     value = os.getenv("CONTENT_REVIEW_ENABLED", os.getenv("REVIEW_ENABLED", "false"))
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def review_settings() -> tuple[int, int]:
+    load_dotenv(override=False)
     try:
         rounds = int(os.getenv("CONTENT_REVIEW_MAX_ROUNDS", str(MAX_REVIEW_ROUNDS)))
     except ValueError:
@@ -78,6 +82,7 @@ def review_settings() -> tuple[int, int]:
 
 def reviewer_model_settings() -> tuple[str | None, str | None, str | None]:
     """Optional independent reviewer credentials; unset values reuse the generation client."""
+    load_dotenv(override=False)
     model = os.getenv("REVIEW_MODEL") or os.getenv("CONTENT_REVIEW_MODEL")
     api_key = os.getenv("REVIEW_API_KEY") or os.getenv("CONTENT_REVIEW_API_KEY")
     base_url = os.getenv("REVIEW_BASE_URL") or os.getenv("CONTENT_REVIEW_BASE_URL")
@@ -169,6 +174,7 @@ async def run_review_loop(
     accept_score: int | None = None,
     initial_content: str | None = None,
     reviewer_client_factory: Callable[[], Any] | None = None,
+    on_iteration: Callable[[ReviewIteration], Awaitable[None]] | None = None,
 ) -> ReviewLoopResult:
     rounds_limit, threshold = review_settings()
     rounds_limit = max_rounds if max_rounds is not None else rounds_limit
@@ -187,6 +193,8 @@ async def run_review_loop(
                 review = await review_content(context, draft, review_client)
             iteration = ReviewIteration(round_number, review.overall_score, review)
             history.append(iteration)
+            if on_iteration is not None:
+                await on_iteration(iteration)
             if best_review is None or review.overall_score > best_review.overall_score:
                 best_review, best_draft = review, draft
             if is_review_acceptable(review, threshold):

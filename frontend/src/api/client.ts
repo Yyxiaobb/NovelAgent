@@ -22,6 +22,7 @@ import type {
   StoryMemoryConflict,
   StoryMemoryPayload,
   User,
+  GenerationReviewIteration,
 } from '../types'
 
 const TOKEN_KEY = 'novel-agent-token'
@@ -75,7 +76,7 @@ async function streamChapterContent(
   path: string,
   body: unknown,
   onChunk?: (chunk: string) => void,
-): Promise<{ content: string; meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: Array<Record<string, unknown>> } }> {
+): Promise<{ content: string; meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: GenerationReviewIteration[] } }> {
   const token = localStorage.getItem(TOKEN_KEY)
   const headers = new Headers({ 'Content-Type': 'application/json' })
   if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -88,7 +89,7 @@ async function streamChapterContent(
   const decoder = new TextDecoder()
   let buffer = ''
   let content = ''
-  let meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: Array<Record<string, unknown>> } | null = null
+  let meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: GenerationReviewIteration[] } | null = null
   const consume = (block: string) => {
     const line = block.split('\n').find(item => item.startsWith('data:'))
     if (!line) return
@@ -363,7 +364,7 @@ export const api = {
       review_final_score?: number | null
       review_stop_reason?: string
       review_error?: string | null
-      review_history?: Array<Record<string, unknown>>
+      review_history?: GenerationReviewIteration[]
     }>(`/api/agent/projects/${projectId}/outline/volumes/generate-plan`, {
       method: 'POST',
       body: JSON.stringify({
@@ -470,7 +471,7 @@ export const api = {
       review_rounds?: number
       review_final_score?: number | null
       review_stop_reason?: string
-      review_history?: Array<Record<string, unknown>>
+      review_history?: GenerationReviewIteration[]
     }>(`/api/agent/projects/${projectId}/chapters/${chapterId}/content`, {
       method: 'POST',
       body: JSON.stringify({ plan, user_idea: userIdea, knowledge_base_ids: knowledgeBaseIds }),

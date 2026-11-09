@@ -59,6 +59,8 @@ CONTENT_REVIEW_ACCEPT_SCORE=85
 
 同步正文接口会在响应中返回 `review_enabled`、`review_rounds`、`review_final_score`、`review_stop_reason` 和 `review_history`。后台正文任务会把同样的评审记录写入任务 `result`。SSE 接口暂时保持原有流式协议，避免把尚未经过评审的中间稿误认为最终稿。
 
+后台任务每完成一轮评审都会保存当前评审历史和进度，并在下一轮开始前检查取消状态；用户取消任务后不会继续发起后续修订请求。章节生成历史页可以展开查看各轮评分、维度分数和编辑建议。
+
 ## 知识库与 RAG 配置
 
 用户知识库会将 TXT / Markdown 文档切分并调用 OpenAI-compatible Embeddings 接口建立向量索引。可在 `.env` 单独配置向量服务：

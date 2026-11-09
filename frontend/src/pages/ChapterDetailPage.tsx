@@ -100,6 +100,7 @@ export function ChapterDetailPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([])
+  const [expandedReviewJobs, setExpandedReviewJobs] = useState<Set<string>>(new Set())
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [versions, setVersions] = useState<ChapterVersion[]>([])
@@ -251,6 +252,15 @@ export function ChapterDetailPage() {
     } finally {
       setRetryingJob(null)
     }
+  }
+
+  function toggleReviewDetails(jobId: string) {
+    setExpandedReviewJobs(current => {
+      const next = new Set(current)
+      if (next.has(jobId)) next.delete(jobId)
+      else next.add(jobId)
+      return next
+    })
   }
 
   const loadVersions = useCallback(async () => {
@@ -497,7 +507,11 @@ export function ChapterDetailPage() {
       setDraft(current => ({ ...current, content: result.content }))
       setKnowledgeCitations(result.citations || [])
       setGenerationDialogOpen(false)
-      setNotice('章节正文已生成，请检查后点击“保存修改”入库')
+      setNotice(
+        result.review_enabled
+          ? `章节正文已生成，评论员最终评分 ${result.review_final_score ?? '未评分'} 分（${result.review_rounds ?? 0} 轮），请检查后点击“保存修改”入库`
+          : '章节正文已生成，请检查后点击“保存修改”入库',
+      )
     } catch (reason) {
       setGenerationError(reason instanceof Error ? reason.message : '章节生成失败，请稍后重试')
     } finally {
@@ -609,13 +623,61 @@ export function ChapterDetailPage() {
                             </small>
                           )}
                           {job.generation_info?.review_enabled && (
-                            <small>
-                              评论员评审：{job.generation_info.review_final_score ?? '未评分'} 分 ·{' '}
-                              {job.generation_info.review_rounds ?? 0} 轮 ·{' '}
-                              {job.generation_info.review_stop_reason === 'threshold_reached' ? '达到阈值' : '达到轮次上限'}
-                              {job.generation_info.review_error ? ` · ${job.generation_info.review_error}` : ''}
-                            </small>
+                            <>
+                              <small>
+                                评论员评审：{job.generation_info.review_final_score ?? '未评分'} 分 ·{' '}
+                                {job.generation_info.review_rounds ?? 0} 轮 ·{' '}
+                                {job.generation_info.review_stop_reason === 'threshold_reached'
+                                  ? '达到阈值'
+                                  : job.generation_info.review_stop_reason === 'review_unavailable'
+                                    ? '评论员不可用，保留初稿'
+                                    : '达到轮次上限'}
+                                {job.generation_info.review_error ? ` · ${job.generation_info.review_error}` : ''}
+                              </small>
+                              {job.generation_info.review_history && job.generation_info.review_history.length > 0 && (
+                                <button
+                                  className="text-button review-details-toggle"
+                                  type="button"
+                                  onClick={() => toggleReviewDetails(job.job_id)}
+                                  aria-expanded={expandedReviewJobs.has(job.job_id)}
+                                >
+                                  {expandedReviewJobs.has(job.job_id) ? '收起评审详情' : '查看评审详情'}
+                                </button>
+                              )}
+                            </>
                           )}
+                          {job.generation_info?.review_enabled &&
+                            expandedReviewJobs.has(job.job_id) &&
+                            job.generation_info.review_history && (
+                              <div className="review-history-details">
+                                {job.generation_info.review_history.map(iteration => (
+                                  <section className="review-iteration" key={`${job.job_id}-${iteration.round}`}>
+                                    <div className="review-iteration-heading">
+                                      <strong>第 {iteration.round} 轮评审</strong>
+                                      <span>{iteration.score} 分</span>
+                                    </div>
+                                    <p>{iteration.review.summary}</p>
+                                    {Object.keys(iteration.review.dimension_scores).length > 0 && (
+                                      <div className="review-dimension-list">
+                                        {Object.entries(iteration.review.dimension_scores).map(([name, score]) => (
+                                          <span key={name}>{name}：{score}</span>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {iteration.review.issues.length > 0 && (
+                                      <ul className="review-issue-list">
+                                        {iteration.review.issues.map(issue => (
+                                          <li key={issue.id}>
+                                            <strong>{issue.must_fix ? '必须修复 · ' : ''}{issue.suggestion}</strong>
+                                            <span>{issue.evidence}</span>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                  </section>
+                                ))}
+                              </div>
+                            )}
                           {job.error && <p className="error-copy">{job.error}</p>}
                         </div>
                         <div className="generation-history-actions">

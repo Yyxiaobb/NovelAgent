@@ -2324,6 +2324,75 @@ p {
   color: var(--muted);
   font-size: 11px;
 }
+.review-details-toggle {
+  width: fit-content;
+  padding: 0;
+  color: var(--accent, #28776e);
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+  cursor: pointer;
+}
+.review-history-details {
+  display: grid;
+  gap: 10px;
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.review-iteration {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.review-iteration-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+.review-iteration-heading span {
+  color: var(--accent, #28776e);
+  font-weight: 700;
+}
+.review-iteration p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.review-dimension-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.review-dimension-list span {
+  padding: 3px 6px;
+  color: var(--muted);
+  background: var(--surface);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.review-issue-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink);
+  font-size: 12px;
+}
+.review-issue-list li {
+  display: grid;
+  gap: 2px;
+}
+.review-issue-list span {
+  color: var(--muted);
+  font-size: 11px;
+}
 .generation-history-actions {
   display: flex;
   flex: 0 0 auto;

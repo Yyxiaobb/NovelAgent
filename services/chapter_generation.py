@@ -3,7 +3,7 @@ import json
 import re
 import math
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -311,6 +311,8 @@ async def generate_reviewed_content(
     context: ChapterContentContext,
     client_factory: Callable,
     content_token_fn: Callable[[int], int],
+    *,
+    on_review_iteration: Callable[[Any], Awaitable[None]] | None = None,
 ) -> tuple[str, str, ReviewLoopResult | None]:
     """Generate content and optionally run the bounded editorial review loop."""
     if not review_enabled():
@@ -351,6 +353,7 @@ async def generate_reviewed_content(
             lambda content: validate_content_quality(content, context.plan.expected_words),
             reviewer_client_factory=reviewer_client,
             initial_content=initial_content,
+            on_iteration=on_review_iteration,
         )
     except Exception as error:
         if isinstance(error, ContentQualityError):
@@ -421,15 +424,36 @@ async def run_content_job(
             if review_enabled():
                 reviewed_content = None
                 review_result = None
+                persisted_review_history: list[dict[str, Any]] = []
+
+                async def persist_review_iteration(iteration: Any) -> None:
+                    current_status = await db.scalar(
+                        select(GenerationJob.status).where(GenerationJob.id == job_id)
+                    )
+                    if current_status == "cancelled":
+                        raise asyncio.CancelledError
+                    persisted_review_history.append(iteration.as_dict())
+                    job.progress = min(95, 20 + iteration.round * 25)
+                    job.result = {
+                        **(job.result or {}),
+                        "review_enabled": True,
+                        "review_rounds": iteration.round,
+                        "review_final_score": iteration.score,
+                        "review_history": persisted_review_history,
+                    }
+                    await db.commit()
+
                 for attempt in range(BACKGROUND_GENERATION_ATTEMPTS):
                     current_status = await db.scalar(
                         select(GenerationJob.status).where(GenerationJob.id == job_id)
                     )
                     if current_status == "cancelled":
                         return
+                    persisted_review_history.clear()
                     try:
                         reviewed_content, model_name, review_result = await generate_reviewed_content(
                             context, client_factory, content_token_fn,
+                            on_review_iteration=persist_review_iteration,
                         )
                     except LLMRequestError as error:
                         if attempt + 1 >= BACKGROUND_GENERATION_ATTEMPTS or not is_retryable_generation_error(error):
