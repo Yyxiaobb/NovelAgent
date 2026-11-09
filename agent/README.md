@@ -43,6 +43,20 @@ MAX_RETRIES=2
 
 `model`、`api_key`、`base_url` 必填。`provider` 仅是服务标识，不决定 URL 或协议。HTTP 地址可用于本地兼容服务，公网服务建议使用 HTTPS。`.env` 不应提交到 Git。
 
+## 章节正文评论员智能体
+
+章节正文可以启用一个只读评论员智能体，对每次生成的完整候选稿按目标完成度、连续性、人物一致性、因果、文风、节奏和结尾钩子进行结构化评分，并在最多三轮内交给内容智能体修订。内容智能体可以拒绝会破坏主线、人物动机或后续伏笔的建议；系统始终保留评分最高的版本。
+
+默认关闭，先在 `.env` 中显式开启：
+
+```dotenv
+CONTENT_REVIEW_ENABLED=true
+CONTENT_REVIEW_MAX_ROUNDS=3
+CONTENT_REVIEW_ACCEPT_SCORE=85
+```
+
+同步正文接口会在响应中返回 `review_enabled`、`review_rounds`、`review_final_score`、`review_stop_reason` 和 `review_history`。后台正文任务会把同样的评审记录写入任务 `result`。SSE 接口暂时保持原有流式协议，避免把尚未经过评审的中间稿误认为最终稿。
+
 ## 知识库与 RAG 配置
 
 用户知识库会将 TXT / Markdown 文档切分并调用 OpenAI-compatible Embeddings 接口建立向量索引。可在 `.env` 单独配置向量服务：

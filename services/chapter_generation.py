@@ -24,6 +24,12 @@ from services.knowledge_rag import (
     format_retrieved_context,
     retrieve_knowledge,
 )
+from services.content_review import (
+    ReviewLoopResult,
+    revision_messages,
+    review_enabled,
+    run_review_loop,
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,8 @@ class ChapterContentContext:
     plan: ChapterPlan
     prompt: str
     citations: list[Any]
+    volume_context: str = ""
+    prior_context: str = ""
 
     @property
     def messages(self) -> list[dict[str, str]]:
@@ -234,6 +242,8 @@ async def prepare_content_context(
         plan=plan,
         prompt=prompt,
         citations=citations,
+        volume_context=volume_context,
+        prior_context=prior_context,
     )
 
 
@@ -241,6 +251,45 @@ async def build_context(db: AsyncSession, project_id: int, chapter_id: int, user
     """Backward-compatible tuple API for callers that still need unpacking."""
     context = await prepare_content_context(db, project_id, chapter_id, user_id, payload)
     return context.project, context.chapter, context.plan, context.prompt, context.citations
+
+
+async def _generate_complete_with_client(
+    context: ChapterContentContext,
+    client: Any,
+    content_token_fn: Callable[[int], int],
+) -> str:
+    segments = build_content_segments(context)
+    outputs: list[str] = []
+    for index, (segment_words, events) in enumerate(segments):
+        messages = _segment_messages(context, index, len(segments), events, "\n".join(outputs))
+        content = (await client.achat(
+            messages, temperature=0.8, max_tokens=content_token_fn(segment_words),
+        )).strip()
+        try:
+            validate_content_quality(content, segment_words)
+        except ContentQualityError as first_error:
+            repair_messages = [
+                *messages,
+                {"role": "assistant", "content": content},
+                {
+                    "role": "user",
+                    "content": (
+                        f"刚才的输出未通过正文质量检查：{first_error}。"
+                        f"请直接重写本段完整正文，目标约 {segment_words} 字，"
+                        "不要添加说明、代码围栏或提示词内容。"
+                    ),
+                },
+            ]
+            content = (await client.achat(
+                repair_messages,
+                temperature=0.55,
+                max_tokens=content_token_fn(segment_words),
+            )).strip()
+            validate_content_quality(content, segment_words)
+        outputs.append(content)
+    complete_content = "\n\n".join(outputs)
+    validate_content_quality(complete_content, context.plan.expected_words)
+    return complete_content
 
 
 async def generate_content(
@@ -254,38 +303,49 @@ async def generate_content(
     without duplicating client lifecycle and request construction.
     """
     async with client_factory() as client:
-        segments = build_content_segments(context)
-        outputs: list[str] = []
-        for index, (segment_words, events) in enumerate(segments):
-            messages = _segment_messages(context, index, len(segments), events, "\n".join(outputs))
-            content = (await client.achat(
-                messages, temperature=0.8, max_tokens=content_token_fn(segment_words),
-            )).strip()
-            try:
-                validate_content_quality(content, segment_words)
-            except ContentQualityError as first_error:
-                repair_messages = [
-                    *messages,
-                    {"role": "assistant", "content": content},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"刚才的输出未通过正文质量检查：{first_error}。"
-                            f"请直接重写本段完整正文，目标约 {segment_words} 字，"
-                            "不要添加说明、代码围栏或提示词内容。"
-                        ),
-                    },
-                ]
-                content = (await client.achat(
-                    repair_messages,
-                    temperature=0.55,
-                    max_tokens=content_token_fn(segment_words),
-                )).strip()
-                validate_content_quality(content, segment_words)
-            outputs.append(content)
-        complete_content = "\n\n".join(outputs)
-        validate_content_quality(complete_content, context.plan.expected_words)
-        return complete_content, client.model
+        return await _generate_complete_with_client(context, client, content_token_fn), client.model
+
+
+async def generate_reviewed_content(
+    context: ChapterContentContext,
+    client_factory: Callable,
+    content_token_fn: Callable[[int], int],
+) -> tuple[str, str, ReviewLoopResult | None]:
+    """Generate content and optionally run the bounded editorial review loop."""
+    if not review_enabled():
+        content, model = await generate_content(context, client_factory, content_token_fn)
+        return content, model, None
+
+    model_name: str | None = None
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def tracked_client_factory():
+        nonlocal model_name
+        async with client_factory() as client:
+            model_name = client.model
+            yield client
+
+    async def generate_candidate(client: Any, previous: str | None, review: Any | None) -> str:
+        if previous is None:
+            return await _generate_complete_with_client(context, client, content_token_fn)
+        messages = revision_messages(context, previous, review)
+        revised = (await client.achat(
+            messages,
+            temperature=0.7,
+            max_tokens=content_token_fn(context.plan.expected_words),
+        )).strip()
+        validate_content_quality(revised, context.plan.expected_words)
+        return revised
+
+    result = await run_review_loop(
+        context,
+        tracked_client_factory,
+        generate_candidate,
+        lambda content: validate_content_quality(content, context.plan.expected_words),
+    )
+    return result.content, model_name or "unknown", result
 
 
 async def stream_content(
@@ -340,6 +400,47 @@ async def run_content_job(
             parts: list[str] = []
             last_persisted = asyncio.get_running_loop().time()
             model_name = None
+
+            if review_enabled():
+                reviewed_content = None
+                review_result = None
+                for attempt in range(BACKGROUND_GENERATION_ATTEMPTS):
+                    current_status = await db.scalar(
+                        select(GenerationJob.status).where(GenerationJob.id == job_id)
+                    )
+                    if current_status == "cancelled":
+                        return
+                    try:
+                        reviewed_content, model_name, review_result = await generate_reviewed_content(
+                            context, client_factory, content_token_fn,
+                        )
+                    except LLMRequestError as error:
+                        if attempt + 1 >= BACKGROUND_GENERATION_ATTEMPTS or not is_retryable_generation_error(error):
+                            raise
+                        await asyncio.sleep(0.5 * (attempt + 1))
+                        continue
+                    break
+                if reviewed_content is None:
+                    raise ContentQualityError("评审流程未生成可用正文")
+                job.output_content = reviewed_content
+                job.progress = 95
+                await db.commit()
+                review_metadata = review_result.metadata() if review_result else {"review_enabled": False}
+                await generation_crud.complete_job_if_active(
+                    db, job_id, output_content=reviewed_content,
+                    result={
+                        "expected_words": context.plan.expected_words,
+                        "plan": context.plan.model_dump(),
+                        "citations": context.citations,
+                        "model": model_name,
+                        "prompt_template_id": "chapter_content",
+                        "prompt_template_version": get_prompt_template("chapter_content").version,
+                        "segments": len(build_content_segments(context)),
+                        "quality_check": "passed",
+                        **review_metadata,
+                    },
+                )
+                return
 
             def remember_client(client):
                 nonlocal model_name

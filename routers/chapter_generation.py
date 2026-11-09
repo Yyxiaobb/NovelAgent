@@ -69,6 +69,8 @@ from services.chapter_generation import (
     ContentQualityError,
     prepare_content_context,
     generate_content,
+    generate_reviewed_content,
+    review_enabled,
     stream_content,
     sse,
     validate_content_quality,
@@ -135,7 +137,9 @@ async def generate_chapter_content(
     )
     try:
         model_started = perf_counter()
-        content, model = await generate_content(context, generation_client, _content_max_tokens)
+        content, model, review_result = await generate_reviewed_content(
+            context, generation_client, _content_max_tokens,
+        )
         log_generation_metric(
             "model_complete",
             "chapter_content",
@@ -169,6 +173,7 @@ async def generate_chapter_content(
             plan=plan,
             content=content,
             citations=citations,
+            **(review_result.metadata() if review_result else {}),
         ),
     )
 
@@ -206,6 +211,27 @@ async def stream_chapter_content(
             client_model = client.model
 
         try:
+            if review_enabled():
+                reviewed_content, reviewed_model, review_result = await generate_reviewed_content(
+                    context, generation_client, _content_max_tokens,
+                )
+                client_model = reviewed_model
+                generated_parts.append(reviewed_content)
+                total = len(reviewed_content)
+                yield sse("chunk", reviewed_content)
+                review_metadata = review_result.metadata() if review_result else {}
+                yield sse(
+                    "done",
+                    {
+                        "project_id": project.id,
+                        "chapter_id": chapter.id,
+                        "expected_words": plan.expected_words,
+                        "plan": plan.model_dump(),
+                        "citations": citations,
+                        **review_metadata,
+                    },
+                )
+                return
             async for chunk in stream_content(
                 context, generation_client, _content_max_tokens, on_client=remember_client
             ):
@@ -300,7 +326,10 @@ async def get_chapter_content_job(job_id: str, user: User = Depends(get_current_
             "citations": result.get("citations", []),
             "generation_info": {
                 key: result.get(key)
-                for key in ("model", "prompt_template_id", "prompt_template_version", "segments", "quality_check")
+                for key in (
+                    "model", "prompt_template_id", "prompt_template_version", "segments", "quality_check",
+                    "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_history",
+                )
                 if result.get(key) is not None
             },
             "error": job.error_message,
@@ -341,6 +370,7 @@ async def list_chapter_content_jobs(
                     key: (job.result or {}).get(key)
                     for key in (
                         "model", "prompt_template_id", "prompt_template_version", "segments", "quality_check",
+                        "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_history",
                     )
                     if (job.result or {}).get(key) is not None
                 },

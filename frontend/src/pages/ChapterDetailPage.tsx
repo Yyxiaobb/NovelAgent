@@ -608,6 +608,13 @@ export function ChapterDetailPage() {
                               质量检查通过
                             </small>
                           )}
+                          {job.generation_info?.review_enabled && (
+                            <small>
+                              评论员评审：{job.generation_info.review_final_score ?? '未评分'} 分 ·{' '}
+                              {job.generation_info.review_rounds ?? 0} 轮 ·{' '}
+                              {job.generation_info.review_stop_reason === 'threshold_reached' ? '达到阈值' : '达到轮次上限'}
+                            </small>
+                          )}
                           {job.error && <p className="error-copy">{job.error}</p>}
                         </div>
                         <div className="generation-history-actions">

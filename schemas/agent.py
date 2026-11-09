@@ -1,6 +1,6 @@
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from schemas.projects import ChapterMemory, ChapterPlan
 from schemas.knowledge_base import KnowledgeCitation
 
@@ -110,6 +110,48 @@ class ChapterGenerationResponse(BaseModel):
     plan: ChapterPlan
     content: str
     citations: list[KnowledgeCitation] = Field(default_factory=list)
+    review_enabled: bool = False
+    review_rounds: int = 0
+    review_final_score: Optional[int] = None
+    review_stop_reason: Optional[str] = None
+    review_history: list[dict] = Field(default_factory=list)
+
+
+ReviewIssueCategory = Literal[
+    "goal", "continuity", "character", "causality",
+    "style", "pacing", "ending",
+]
+ReviewIssueSeverity = Literal["minor", "major", "critical"]
+
+
+class ReviewIssue(BaseModel):
+    """A concrete, evidence-backed issue found in a generated draft."""
+
+    id: str = Field(..., min_length=1, max_length=80)
+    category: ReviewIssueCategory
+    severity: ReviewIssueSeverity
+    evidence: str = Field(..., min_length=1, max_length=1000)
+    suggestion: str = Field(..., min_length=1, max_length=1000)
+    must_fix: bool = False
+
+
+class ContentReview(BaseModel):
+    """Structured editorial review returned by the read-only reviewer agent."""
+
+    overall_score: int = Field(..., ge=0, le=100)
+    summary: str = Field(..., min_length=1, max_length=2000)
+    strengths: list[str] = Field(default_factory=list, max_length=8)
+    issues: list[ReviewIssue] = Field(default_factory=list, max_length=20)
+    dimension_scores: dict[str, int] = Field(default_factory=dict, max_length=10)
+    stop_recommendation: bool = False
+
+    @field_validator("dimension_scores")
+    @classmethod
+    def validate_dimension_scores(cls, value: dict[str, int]) -> dict[str, int]:
+        allowed = {"goal", "continuity", "character", "causality", "style", "pacing", "ending"}
+        if any(key not in allowed or score < 0 or score > 100 for key, score in value.items()):
+            raise ValueError("dimension_scores must contain only 0-100 scores for known dimensions")
+        return value
 
 
 class ChapterMemoryGenerationRequest(BaseModel):

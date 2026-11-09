@@ -189,6 +189,11 @@ export interface GenerationJob {
     prompt_template_version?: string
     segments?: number
     quality_check?: string
+    review_enabled?: boolean
+    review_rounds?: number
+    review_final_score?: number | null
+    review_stop_reason?: string
+    review_history?: Array<Record<string, unknown>>
   }
   error: string | null
   created_at: string
