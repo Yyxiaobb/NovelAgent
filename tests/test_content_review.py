@@ -10,6 +10,7 @@ from services.content_review import (
     is_review_acceptable,
     review_content,
     run_review_loop,
+    reviewer_model_settings,
 )
 from schemas.projects import ChapterPlan
 
@@ -57,6 +58,21 @@ class ContentReviewTests(unittest.IsolatedAsyncioTestCase):
         hard = ContentReview.model_validate(json.loads(self.review_json(95, must_fix=True)))
         self.assertTrue(is_review_acceptable(good, 85))
         self.assertFalse(is_review_acceptable(hard, 85))
+
+    def test_reviewer_settings_are_optional_and_independent(self):
+        import os
+        previous = {name: os.environ.get(name) for name in ("REVIEW_MODEL", "REVIEW_API_KEY", "REVIEW_BASE_URL")}
+        try:
+            os.environ["REVIEW_MODEL"] = "review-model"
+            os.environ["REVIEW_API_KEY"] = "review-key"
+            os.environ["REVIEW_BASE_URL"] = "https://review.test/v1"
+            self.assertEqual(reviewer_model_settings(), ("review-model", "review-key", "https://review.test/v1"))
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
     async def test_loop_keeps_best_version_after_revision_scores_lower(self):
         review_outputs = [self.review_json(70, stop=False), self.review_json(80, stop=False)]

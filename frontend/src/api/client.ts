@@ -75,7 +75,7 @@ async function streamChapterContent(
   path: string,
   body: unknown,
   onChunk?: (chunk: string) => void,
-): Promise<{ content: string; meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_history?: Array<Record<string, unknown>> } }> {
+): Promise<{ content: string; meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: Array<Record<string, unknown>> } }> {
   const token = localStorage.getItem(TOKEN_KEY)
   const headers = new Headers({ 'Content-Type': 'application/json' })
   if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -88,7 +88,7 @@ async function streamChapterContent(
   const decoder = new TextDecoder()
   let buffer = ''
   let content = ''
-  let meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_history?: Array<Record<string, unknown>> } | null = null
+  let meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: Array<Record<string, unknown>> } | null = null
   const consume = (block: string) => {
     const line = block.split('\n').find(item => item.startsWith('data:'))
     if (!line) return
@@ -98,7 +98,7 @@ async function streamChapterContent(
       content += chunk
       onChunk?.(chunk)
     } else if (event.event === 'done') {
-      meta = event.data as { expected_words: number; plan: ChapterPlan }
+      meta = event.data as typeof meta
     } else if (event.event === 'error') {
       throw new ApiError(String(event.data))
     }
@@ -362,6 +362,7 @@ export const api = {
       review_rounds?: number
       review_final_score?: number | null
       review_stop_reason?: string
+      review_error?: string | null
       review_history?: Array<Record<string, unknown>>
     }>(`/api/agent/projects/${projectId}/outline/volumes/generate-plan`, {
       method: 'POST',
@@ -500,6 +501,7 @@ export const api = {
         review_rounds: result.meta.review_rounds,
         review_final_score: result.meta.review_final_score,
         review_stop_reason: result.meta.review_stop_reason,
+        review_error: result.meta.review_error,
         review_history: result.meta.review_history,
       }
     }
@@ -536,6 +538,7 @@ export const api = {
           review_rounds: status.generation_info?.review_rounds,
           review_final_score: status.generation_info?.review_final_score,
           review_stop_reason: status.generation_info?.review_stop_reason,
+          review_error: status.generation_info?.review_error,
           review_history: status.generation_info?.review_history,
         }
       if (status.status === 'failed') throw new ApiError(status.error || '章节生成失败，请稍后重试')

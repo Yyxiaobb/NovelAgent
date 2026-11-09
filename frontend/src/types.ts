@@ -193,6 +193,7 @@ export interface GenerationJob {
     review_rounds?: number
     review_final_score?: number | null
     review_stop_reason?: string
+    review_error?: string | null
     review_history?: Array<Record<string, unknown>>
   }
   error: string | null

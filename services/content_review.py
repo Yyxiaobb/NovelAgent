@@ -42,6 +42,7 @@ class ReviewLoopResult:
     history: list[ReviewIteration]
     rounds: int
     stop_reason: str
+    review_error: str | None = None
 
     @property
     def final_score(self) -> int | None:
@@ -53,6 +54,7 @@ class ReviewLoopResult:
             "review_rounds": self.rounds,
             "review_final_score": self.final_score,
             "review_stop_reason": self.stop_reason,
+            "review_error": self.review_error,
             "review_history": [item.as_dict() for item in self.history],
         }
 
@@ -72,6 +74,14 @@ def review_settings() -> tuple[int, int]:
     except ValueError:
         threshold = DEFAULT_ACCEPT_SCORE
     return max(1, min(rounds, MAX_REVIEW_ROUNDS)), max(0, min(threshold, 100))
+
+
+def reviewer_model_settings() -> tuple[str | None, str | None, str | None]:
+    """Optional independent reviewer credentials; unset values reuse the generation client."""
+    model = os.getenv("REVIEW_MODEL") or os.getenv("CONTENT_REVIEW_MODEL")
+    api_key = os.getenv("REVIEW_API_KEY") or os.getenv("CONTENT_REVIEW_API_KEY")
+    base_url = os.getenv("REVIEW_BASE_URL") or os.getenv("CONTENT_REVIEW_BASE_URL")
+    return model, api_key, base_url
 
 
 def _json_candidate(raw: str) -> dict[str, Any]:
@@ -157,6 +167,8 @@ async def run_review_loop(
     *,
     max_rounds: int | None = None,
     accept_score: int | None = None,
+    initial_content: str | None = None,
+    reviewer_client_factory: Callable[[], Any] | None = None,
 ) -> ReviewLoopResult:
     rounds_limit, threshold = review_settings()
     rounds_limit = max_rounds if max_rounds is not None else rounds_limit
@@ -164,13 +176,15 @@ async def run_review_loop(
     rounds_limit = max(1, min(rounds_limit, MAX_REVIEW_ROUNDS))
     threshold = max(0, min(threshold, 100))
     async with client_factory() as client:
-        draft = (await generate_candidate(client, None, None)).strip()
+        review_factory = reviewer_client_factory or client_factory
+        draft = (initial_content if initial_content is not None else await generate_candidate(client, None, None)).strip()
         validate_candidate(draft)
         history: list[ReviewIteration] = []
         best_draft = draft
         best_review: ContentReview | None = None
         for round_number in range(1, rounds_limit + 1):
-            review = await review_content(context, draft, client)
+            async with review_factory() as review_client:
+                review = await review_content(context, draft, review_client)
             iteration = ReviewIteration(round_number, review.overall_score, review)
             history.append(iteration)
             if best_review is None or review.overall_score > best_review.overall_score:

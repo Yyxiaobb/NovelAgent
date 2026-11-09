@@ -30,6 +30,7 @@ from services.content_review import (
     review_enabled,
     run_review_loop,
 )
+from services.generation_runtime import reviewer_client
 
 
 @dataclass(frozen=True)
@@ -339,12 +340,28 @@ async def generate_reviewed_content(
         validate_content_quality(revised, context.plan.expected_words)
         return revised
 
-    result = await run_review_loop(
-        context,
-        tracked_client_factory,
-        generate_candidate,
-        lambda content: validate_content_quality(content, context.plan.expected_words),
-    )
+    async with client_factory() as initial_client:
+        model_name = initial_client.model
+        initial_content = await _generate_complete_with_client(context, initial_client, content_token_fn)
+    try:
+        result = await run_review_loop(
+            context,
+            tracked_client_factory,
+            generate_candidate,
+            lambda content: validate_content_quality(content, context.plan.expected_words),
+            reviewer_client_factory=reviewer_client,
+            initial_content=initial_content,
+        )
+    except Exception as error:
+        if isinstance(error, ContentQualityError):
+            raise
+        # A reviewer outage must not discard a valid generated draft. Return it
+        # with an explicit degraded result so callers can surface the reason.
+        degraded = ReviewLoopResult(
+            content=initial_content, review=None, history=[], rounds=0,
+            stop_reason="review_unavailable", review_error="评论员暂时不可用，已返回未评审初稿",
+        )
+        return initial_content, model_name or "unknown", degraded
     return result.content, model_name or "unknown", result
 
 

@@ -114,6 +114,7 @@ class ChapterGenerationResponse(BaseModel):
     review_rounds: int = 0
     review_final_score: Optional[int] = None
     review_stop_reason: Optional[str] = None
+    review_error: Optional[str] = None
     review_history: list[dict] = Field(default_factory=list)
 
 

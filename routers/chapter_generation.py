@@ -328,7 +328,7 @@ async def get_chapter_content_job(job_id: str, user: User = Depends(get_current_
                 key: result.get(key)
                 for key in (
                     "model", "prompt_template_id", "prompt_template_version", "segments", "quality_check",
-                    "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_history",
+                    "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_error", "review_history",
                 )
                 if result.get(key) is not None
             },
@@ -370,7 +370,7 @@ async def list_chapter_content_jobs(
                     key: (job.result or {}).get(key)
                     for key in (
                         "model", "prompt_template_id", "prompt_template_version", "segments", "quality_check",
-                        "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_history",
+                        "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_error", "review_history",
                     )
                     if (job.result or {}).get(key) is not None
                 },

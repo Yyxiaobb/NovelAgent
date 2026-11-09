@@ -55,6 +55,8 @@ CONTENT_REVIEW_MAX_ROUNDS=3
 CONTENT_REVIEW_ACCEPT_SCORE=85
 ```
 
+如果希望评论员使用独立模型，可以同时配置 `REVIEW_MODEL`、`REVIEW_API_KEY` 和 `REVIEW_BASE_URL`；三项必须完整提供。评论员配置缺失或暂时不可用时，系统保留有效初稿并在结果中标记 `review_stop_reason=review_unavailable`，不会因为评论员故障丢弃正文。
+
 同步正文接口会在响应中返回 `review_enabled`、`review_rounds`、`review_final_score`、`review_stop_reason` 和 `review_history`。后台正文任务会把同样的评审记录写入任务 `result`。SSE 接口暂时保持原有流式协议，避免把尚未经过评审的中间稿误认为最终稿。
 
 ## 知识库与 RAG 配置
