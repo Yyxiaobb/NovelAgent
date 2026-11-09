@@ -41,6 +41,25 @@ async def list_pending_jobs(db: AsyncSession, *, limit: int = 100) -> list[Gener
     return list(result.scalars().all())
 
 
+async def list_review_jobs(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    project_id: int | None = None,
+    limit: int = 5000,
+) -> list[GenerationJob]:
+    """Load a bounded set of recent chapter jobs for review analytics."""
+    query = select(GenerationJob).where(
+        GenerationJob.user_id == user_id,
+        GenerationJob.job_type == "chapter_content",
+    )
+    if project_id is not None:
+        query = query.where(GenerationJob.project_id == project_id)
+    query = query.order_by(GenerationJob.created_at.desc()).limit(max(1, min(limit, 5000)))
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
 async def create_chapter_content_job(
     db: AsyncSession,
     *,

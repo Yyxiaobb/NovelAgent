@@ -2660,6 +2660,38 @@ p {
   color: var(--danger, #a33);
   font-size: 12px;
 }
+.review-preferences-form {
+  margin-top: 16px;
+}
+.checkbox-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.checkbox-field input {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+.project-review-settings {
+  display: grid;
+  gap: 14px;
+}
+.project-review-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.project-review-controls .checkbox-field {
+  grid-column: 1 / -1;
+}
+@media (max-width: 720px) {
+  .project-review-controls {
+    grid-template-columns: 1fr;
+  }
+}
 .danger-panel .panel-title > div:nth-child(2) {
   flex: 1;
 }

@@ -13,7 +13,15 @@ import {
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
-import type { Chapter, ChapterMemory, ChapterPlan, ChapterVersion, GenerationJob, KnowledgeCitation } from '../types'
+import type {
+  Chapter,
+  ChapterMemory,
+  ChapterPlan,
+  ChapterVersion,
+  GenerationJob,
+  GenerationReviewIteration,
+  KnowledgeCitation,
+} from '../types'
 import { KnowledgeBaseSelector } from '../components/KnowledgeBaseSelector'
 import { KnowledgeCitationList } from '../components/KnowledgeCitationList'
 import { DraftRecoveryBanner } from '../components/DraftRecoveryBanner'
@@ -68,6 +76,35 @@ function parseChapterPlan(text: string, expectedWords: number, current: ChapterP
   }
 }
 
+function ReviewIterationCard({ iteration, heading }: { iteration: GenerationReviewIteration; heading: string }) {
+  return (
+    <section className="review-iteration">
+      <div className="review-iteration-heading">
+        <strong>{heading}</strong>
+        <span>{iteration.score} 分</span>
+      </div>
+      <p>{iteration.review.summary}</p>
+      {Object.keys(iteration.review.dimension_scores).length > 0 && (
+        <div className="review-dimension-list">
+          {Object.entries(iteration.review.dimension_scores).map(([name, score]) => (
+            <span key={name}>{name}：{score}</span>
+          ))}
+        </div>
+      )}
+      {iteration.review.issues.length > 0 && (
+        <ul className="review-issue-list">
+          {iteration.review.issues.map(issue => (
+            <li key={issue.id}>
+              <strong>{issue.must_fix ? '必须修复 · ' : ''}{issue.suggestion}</strong>
+              <span>{issue.evidence}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 export function ChapterDetailPage() {
   const { projectId, chapterId, feature } = useParams()
   const location = useLocation()
@@ -99,6 +136,7 @@ export function ChapterDetailPage() {
   const [planGenerating, setPlanGenerating] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [generationReview, setGenerationReview] = useState<GenerationReviewIteration[]>([])
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([])
   const [expandedReviewJobs, setExpandedReviewJobs] = useState<Set<string>>(new Set())
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -484,6 +522,7 @@ export function ChapterDetailPage() {
     setGenerating(true)
     setGenerationProgress(0)
     setGenerationError('')
+    setGenerationReview([])
     setDraft(current => ({ ...current, content: '' }))
     try {
       const plan = parseChapterPlan(planTextDraft, words, planDraft)
@@ -506,10 +545,13 @@ export function ChapterDetailPage() {
             : await api.generateChapterContent(chapter.project_id, chapter.id, plan, generationIdea)
       setDraft(current => ({ ...current, content: result.content }))
       setKnowledgeCitations(result.citations || [])
+      setGenerationReview(result.review_history || [])
       setGenerationDialogOpen(false)
       setNotice(
         result.review_enabled
-          ? `章节正文已生成，评论员最终评分 ${result.review_final_score ?? '未评分'} 分（${result.review_rounds ?? 0} 轮），请检查后点击“保存修改”入库`
+          ? result.review_stop_reason === 'manual_approval_required'
+            ? `人工审核已暂停自动修订：评论员评分 ${result.review_final_score ?? '未评分'} 分。请查看评审意见并手动修改后保存。`
+            : `章节正文已生成，评论员最终评分 ${result.review_final_score ?? '未评分'} 分（${result.review_rounds ?? 0} 轮），请检查后点击“保存修改”入库`
           : '章节正文已生成，请检查后点击“保存修改”入库',
       )
     } catch (reason) {
@@ -629,6 +671,8 @@ export function ChapterDetailPage() {
                                 {job.generation_info.review_rounds ?? 0} 轮 ·{' '}
                                 {job.generation_info.review_stop_reason === 'threshold_reached'
                                   ? '达到阈值'
+                                  : job.generation_info.review_stop_reason === 'manual_approval_required'
+                                    ? '等待人工审核，未自动修订'
                                   : job.generation_info.review_stop_reason === 'review_unavailable'
                                     ? '评论员不可用，保留初稿'
                                     : '达到轮次上限'}
@@ -651,30 +695,11 @@ export function ChapterDetailPage() {
                             job.generation_info.review_history && (
                               <div className="review-history-details">
                                 {job.generation_info.review_history.map(iteration => (
-                                  <section className="review-iteration" key={`${job.job_id}-${iteration.round}`}>
-                                    <div className="review-iteration-heading">
-                                      <strong>第 {iteration.round} 轮评审</strong>
-                                      <span>{iteration.score} 分</span>
-                                    </div>
-                                    <p>{iteration.review.summary}</p>
-                                    {Object.keys(iteration.review.dimension_scores).length > 0 && (
-                                      <div className="review-dimension-list">
-                                        {Object.entries(iteration.review.dimension_scores).map(([name, score]) => (
-                                          <span key={name}>{name}：{score}</span>
-                                        ))}
-                                      </div>
-                                    )}
-                                    {iteration.review.issues.length > 0 && (
-                                      <ul className="review-issue-list">
-                                        {iteration.review.issues.map(issue => (
-                                          <li key={issue.id}>
-                                            <strong>{issue.must_fix ? '必须修复 · ' : ''}{issue.suggestion}</strong>
-                                            <span>{issue.evidence}</span>
-                                          </li>
-                                        ))}
-                                      </ul>
-                                    )}
-                                  </section>
+                                  <ReviewIterationCard
+                                    key={`${job.job_id}-${iteration.round}`}
+                                    iteration={iteration}
+                                    heading={`第 ${iteration.round} 轮评审`}
+                                  />
                                 ))}
                                 {job.generation_info?.revision_decisions && job.generation_info.revision_decisions.length > 0 && (
                                   <section className="review-decisions">
@@ -897,6 +922,18 @@ export function ChapterDetailPage() {
             <div className="form-message success page-notice" role="status">
               {notice}
             </div>
+          )}
+          {generationReview.length > 0 && (
+            <section className="content-section review-history-details" aria-label="本次生成的编辑评审">
+              <h2>本次生成的编辑评审</h2>
+              {generationReview.map(iteration => (
+                <ReviewIterationCard
+                  key={`current-review-${iteration.round}`}
+                  iteration={iteration}
+                  heading={`第 ${iteration.round} 轮评审`}
+                />
+              ))}
+            </section>
           )}
           {draftProtection.recovery && (
             <DraftRecoveryBanner

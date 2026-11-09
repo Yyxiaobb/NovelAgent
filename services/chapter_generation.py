@@ -314,9 +314,10 @@ async def generate_reviewed_content(
     content_token_fn: Callable[[int], int],
     *,
     on_review_iteration: Callable[[Any], Awaitable[None]] | None = None,
+    review_preferences: dict[str, Any] | None = None,
 ) -> tuple[str, str, ReviewLoopResult | None]:
     """Generate content and optionally run the bounded editorial review loop."""
-    if not review_enabled():
+    if not review_enabled(review_preferences):
         content, model = await generate_content(context, client_factory, content_token_fn)
         return content, model, None
 
@@ -356,6 +357,7 @@ async def generate_reviewed_content(
             reviewer_client_factory=reviewer_client,
             initial_content=initial_content,
             on_iteration=on_review_iteration,
+            preferences=review_preferences,
         )
     except Exception as error:
         if isinstance(error, ContentQualityError):
@@ -423,7 +425,7 @@ async def run_content_job(
             last_persisted = asyncio.get_running_loop().time()
             model_name = None
 
-            if review_enabled():
+            if review_enabled(payload.review_preferences):
                 reviewed_content = None
                 review_result = None
                 persisted_review_history: list[dict[str, Any]] = []
@@ -456,6 +458,7 @@ async def run_content_job(
                         reviewed_content, model_name, review_result = await generate_reviewed_content(
                             context, client_factory, content_token_fn,
                             on_review_iteration=persist_review_iteration,
+                            review_preferences=payload.review_preferences,
                         )
                     except LLMRequestError as error:
                         if attempt + 1 >= BACKGROUND_GENERATION_ATTEMPTS or not is_retryable_generation_error(error):

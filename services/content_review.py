@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from dotenv import load_dotenv
@@ -65,13 +67,15 @@ class ReviewLoopResult:
         }
 
 
-def review_enabled() -> bool:
+def review_enabled(preferences: dict[str, Any] | None = None) -> bool:
+    if preferences and preferences.get("enabled") is not None:
+        return bool(preferences["enabled"])
     load_dotenv(override=False)
     value = os.getenv("CONTENT_REVIEW_ENABLED", os.getenv("REVIEW_ENABLED", "false"))
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def review_settings() -> tuple[int, int]:
+def review_settings(preferences: dict[str, Any] | None = None) -> tuple[int, int]:
     load_dotenv(override=False)
     try:
         rounds = int(os.getenv("CONTENT_REVIEW_MAX_ROUNDS", str(MAX_REVIEW_ROUNDS)))
@@ -81,7 +85,9 @@ def review_settings() -> tuple[int, int]:
         threshold = int(os.getenv("CONTENT_REVIEW_ACCEPT_SCORE", str(DEFAULT_ACCEPT_SCORE)))
     except ValueError:
         threshold = DEFAULT_ACCEPT_SCORE
-    return max(1, min(rounds, MAX_REVIEW_ROUNDS)), max(0, min(threshold, 100))
+    rounds = (preferences or {}).get("max_rounds", rounds)
+    threshold = (preferences or {}).get("accept_score", threshold)
+    return max(1, min(int(rounds), MAX_REVIEW_ROUNDS)), max(0, min(int(threshold), 100))
 
 
 def reviewer_model_settings() -> tuple[str | None, str | None, str | None]:
@@ -93,9 +99,9 @@ def reviewer_model_settings() -> tuple[str | None, str | None, str | None]:
     return model, api_key, base_url
 
 
-def review_runtime_config() -> dict[str, Any]:
+def review_runtime_config(preferences: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return safe, non-secret review configuration for observability endpoints."""
-    rounds, threshold = review_settings()
+    rounds, threshold = review_settings(preferences)
     model, api_key, base_url = reviewer_model_settings()
     configured_values = [model, api_key, base_url]
     if not any(configured_values):
@@ -108,12 +114,49 @@ def review_runtime_config() -> dict[str, Any]:
         reviewer_mode = "dedicated"
         configuration_status = "incomplete"
     return {
-        "enabled": review_enabled(),
+        "enabled": review_enabled(preferences),
         "max_rounds": rounds,
         "accept_score": threshold,
         "reviewer_mode": reviewer_mode,
         "reviewer_model": model,
         "configuration_status": configuration_status,
+        "manual_approval": bool((preferences or {}).get("manual_approval", False)),
+    }
+
+
+def summarize_review_jobs(jobs: list[Any]) -> dict[str, Any]:
+    """Build bounded aggregate quality and runtime metrics from persisted jobs."""
+    reviewed = [job for job in jobs if (job.result or {}).get("review_enabled")]
+    scores = [
+        int((job.result or {}).get("review_final_score"))
+        for job in reviewed
+        if isinstance((job.result or {}).get("review_final_score"), (int, float))
+    ]
+    rounds = [
+        int((job.result or {}).get("review_rounds"))
+        for job in reviewed
+        if isinstance((job.result or {}).get("review_rounds"), (int, float))
+    ]
+    stop_reasons = Counter((job.result or {}).get("review_stop_reason") or "unknown" for job in reviewed)
+    decisions = Counter()
+    durations = []
+    for job in reviewed:
+        for decision in (job.result or {}).get("revision_decisions", []):
+            if decision.get("decision") in {"accepted", "partially_accepted", "rejected"}:
+                decisions[decision["decision"]] += 1
+        if job.finished_at and job.created_at:
+            durations.append(max(0.0, (job.finished_at - job.created_at).total_seconds()))
+    return {
+        "total_jobs": len(jobs),
+        "reviewed_jobs": len(reviewed),
+        "review_unavailable_jobs": stop_reasons.get("review_unavailable", 0),
+        "average_score": round(sum(scores) / len(scores), 1) if scores else None,
+        "average_rounds": round(sum(rounds) / len(rounds), 1) if rounds else None,
+        "average_duration_seconds": round(sum(durations) / len(durations), 1) if durations else None,
+        "stop_reasons": dict(stop_reasons),
+        "revision_decisions": dict(decisions),
+        "sample_limit": 5000,
+        "generated_at": datetime.now().isoformat(),
     }
 
 
@@ -215,8 +258,9 @@ async def run_review_loop(
     initial_content: str | None = None,
     reviewer_client_factory: Callable[[], Any] | None = None,
     on_iteration: Callable[[ReviewIteration], Awaitable[None]] | None = None,
+    preferences: dict[str, Any] | None = None,
 ) -> ReviewLoopResult:
-    rounds_limit, threshold = review_settings()
+    rounds_limit, threshold = review_settings(preferences)
     rounds_limit = max_rounds if max_rounds is not None else rounds_limit
     threshold = accept_score if accept_score is not None else threshold
     rounds_limit = max(1, min(rounds_limit, MAX_REVIEW_ROUNDS))
@@ -238,6 +282,11 @@ async def run_review_loop(
                 await on_iteration(iteration)
             if best_review is None or review.overall_score > best_review.overall_score:
                 best_review, best_draft = review, draft
+            if (preferences or {}).get("manual_approval"):
+                return ReviewLoopResult(
+                    draft, review, history, round_number, "manual_approval_required",
+                    revision_decisions=revision_decisions,
+                )
             if is_review_acceptable(review, threshold):
                 return ReviewLoopResult(
                     draft, review, history, round_number, "threshold_reached",

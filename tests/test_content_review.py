@@ -13,6 +13,7 @@ from services.content_review import (
     run_review_loop,
     reviewer_model_settings,
     review_runtime_config,
+    summarize_review_jobs,
 )
 from schemas.projects import ChapterPlan
 
@@ -101,6 +102,31 @@ class ContentReviewTests(unittest.IsolatedAsyncioTestCase):
                     os.environ.pop(name, None)
                 else:
                     os.environ[name] = value
+
+    def test_review_job_summary_aggregates_scores_decisions_and_durations(self):
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        jobs = [
+            SimpleNamespace(
+                result={
+                    "review_enabled": True, "review_final_score": 80, "review_rounds": 2,
+                    "review_stop_reason": "threshold_reached",
+                    "revision_decisions": [{"decision": "accepted"}, {"decision": "rejected"}],
+                },
+                created_at=now - timedelta(seconds=20), finished_at=now,
+            ),
+            SimpleNamespace(
+                result={"review_enabled": True, "review_stop_reason": "review_unavailable"},
+                created_at=now - timedelta(seconds=10), finished_at=now,
+            ),
+            SimpleNamespace(result={"review_enabled": False}, created_at=now, finished_at=None),
+        ]
+        summary = summarize_review_jobs(jobs)
+        self.assertEqual(summary["total_jobs"], 3)
+        self.assertEqual(summary["reviewed_jobs"], 2)
+        self.assertEqual(summary["average_score"], 80)
+        self.assertEqual(summary["review_unavailable_jobs"], 1)
+        self.assertEqual(summary["revision_decisions"]["accepted"], 1)
 
     def test_revision_output_records_acceptance_decisions_and_supports_plain_text_fallback(self):
         structured = json.dumps({
@@ -196,6 +222,30 @@ class ContentReviewTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.stop_reason, "threshold_reached")
         self.assertEqual(result.revision_decisions[0].round, 1)
+
+    async def test_manual_approval_returns_after_first_review_without_generating_revision(self):
+        client = SimpleNamespace(
+            model="review-model",
+            achat=AsyncMock(return_value=self.review_json(70, stop=False)),
+        )
+
+        @asynccontextmanager
+        async def factory():
+            yield client
+
+        candidate = AsyncMock(return_value=self.content)
+        result = await run_review_loop(
+            self.context,
+            factory,
+            candidate,
+            lambda value: validate_content_quality(value, 3000),
+            preferences={"manual_approval": True, "max_rounds": 3},
+        )
+
+        self.assertEqual(result.stop_reason, "manual_approval_required")
+        self.assertEqual(result.rounds, 1)
+        self.assertEqual(result.content, self.content)
+        candidate.assert_awaited_once_with(client, None, None)
 
 
 if __name__ == "__main__":

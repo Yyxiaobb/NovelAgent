@@ -9,6 +9,9 @@ import { ProjectDetailPage } from './ProjectDetailPage'
 vi.mock('../api/client', () => ({
   api: {
     getProject: vi.fn(),
+    getReviewPreferences: vi.fn(),
+    getProjectReviewPreferences: vi.fn(),
+    updateProjectReviewPreferences: vi.fn(),
     getProjectChapters: vi.fn(),
     getOutlineVolumes: vi.fn(),
     updateProject: vi.fn(),
@@ -51,6 +54,17 @@ const chapter: Chapter = {
 beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(api.getProject).mockResolvedValue(project)
+  vi.mocked(api.getReviewPreferences).mockResolvedValue({
+    enabled: false,
+    max_rounds: 3,
+    accept_score: 85,
+    reviewer_mode: 'shared',
+    reviewer_model: null,
+    configuration_status: 'shared',
+    manual_approval: false,
+  })
+  vi.mocked(api.getProjectReviewPreferences).mockResolvedValue({})
+  vi.mocked(api.updateProjectReviewPreferences).mockResolvedValue({})
   vi.mocked(api.getProjectChapters).mockResolvedValue([chapter])
   vi.mocked(api.getOutlineVolumes).mockResolvedValue([])
   vi.mocked(api.updateProject).mockResolvedValue(project)
@@ -96,6 +110,29 @@ describe('作品详情页', () => {
     expect(screen.getByText(project.project_type!)).toBeTruthy()
     expect(screen.getByRole('heading', { name: '启航' })).toBeTruthy()
     expect(screen.getByText('章节管理')).toBeTruthy()
+  })
+
+  it('作品评审覆盖可以清除并回到账户默认值', async () => {
+    vi.mocked(api.getProjectReviewPreferences).mockResolvedValue({
+      enabled: true,
+      max_rounds: 2,
+      accept_score: 90,
+      manual_approval: true,
+    })
+    renderPage()
+
+    await screen.findByRole('heading', { name: '作品评审偏好' })
+    const reviewerSwitch = screen.getByLabelText('评论员')
+    expect((reviewerSwitch as HTMLSelectElement).value).toBe('on')
+    await userEvent.click(screen.getByRole('button', { name: '使用账户默认' }))
+
+    expect(api.updateProjectReviewPreferences).toHaveBeenCalledWith(project.id, {
+      enabled: null,
+      max_rounds: null,
+      accept_score: null,
+      manual_approval: null,
+    })
+    expect((screen.getByLabelText('评论员') as HTMLSelectElement).value).toBe('off')
   })
 
   it('生成智能封面前要求输入作者名，并把作者名传给后端', async () => {

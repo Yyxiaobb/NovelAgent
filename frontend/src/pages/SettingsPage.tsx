@@ -13,21 +13,47 @@ export function SettingsPage() {
   const [submitting, setSubmitting] = useState(false)
   const [changingPassword, setChangingPassword] = useState(false)
   const [reviewConfig, setReviewConfig] = useState<Awaited<ReturnType<typeof api.getReviewConfig>> | null>(null)
+  const [reviewStats, setReviewStats] = useState<Awaited<ReturnType<typeof api.getReviewStats>> | null>(null)
+  const [reviewForm, setReviewForm] = useState({ enabled: false, max_rounds: 3, accept_score: 85, manual_approval: false })
+  const [savingReview, setSavingReview] = useState(false)
   const [reviewConfigError, setReviewConfigError] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
-    void api.getReviewConfig()
-      .then(config => {
-        if (active) setReviewConfig(config)
+    void Promise.all([api.getReviewPreferences(), api.getReviewStats()])
+      .then(([config, stats]) => {
+        if (active) {
+          setReviewConfig(config)
+          setReviewStats(stats)
+          setReviewForm({
+            enabled: config.enabled,
+            max_rounds: config.max_rounds,
+            accept_score: config.accept_score,
+            manual_approval: config.manual_approval,
+          })
+        }
       })
       .catch(reason => {
-        if (active) setReviewConfigError(reason instanceof Error ? reason.message : '评审配置读取失败')
+        if (active) setReviewConfigError(reason instanceof Error ? reason.message : '评审信息读取失败')
       })
     return () => {
       active = false
     }
   }, [])
+
+  async function saveReviewPreferences(event: FormEvent) {
+    event.preventDefault()
+    setSavingReview(true)
+    setReviewConfigError(null)
+    try {
+      const saved = await api.updateReviewPreferences(reviewForm)
+      setReviewConfig(saved)
+    } catch (reason) {
+      setReviewConfigError(reason instanceof Error ? reason.message : '评审偏好保存失败')
+    } finally {
+      setSavingReview(false)
+    }
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -160,6 +186,7 @@ export function SettingsPage() {
         </div>
         {reviewConfigError && <div className="form-message error" role="status">{reviewConfigError}</div>}
         {reviewConfig && (
+          <>
           <div className="review-config-grid">
             <div><span>状态</span><strong>{reviewConfig.enabled ? '已启用' : '未启用'}</strong></div>
             <div><span>最多轮数</span><strong>{reviewConfig.max_rounds} 轮</strong></div>
@@ -175,6 +202,50 @@ export function SettingsPage() {
             {reviewConfig.configuration_status === 'incomplete' && (
               <p className="settings-inline-warning">独立评论员配置不完整，将无法正常启动评审。</p>
             )}
+          </div>
+          <form className="form-stack settings-form review-preferences-form" onSubmit={saveReviewPreferences}>
+            <label className="field"><span>账户默认</span>
+              <select value={reviewForm.enabled ? 'on' : 'off'} onChange={event => setReviewForm(value => ({ ...value, enabled: event.target.value === 'on' }))}>
+                <option value="off">关闭评论员</option><option value="on">启用评论员</option>
+              </select>
+            </label>
+            <label className="field"><span>最大评审轮数（1–3）</span>
+              <input type="number" min="1" max="3" value={reviewForm.max_rounds} onChange={event => setReviewForm(value => ({ ...value, max_rounds: Number(event.target.value) }))} />
+            </label>
+            <label className="field"><span>达标分数（0–100）</span>
+              <input type="number" min="0" max="100" value={reviewForm.accept_score} onChange={event => setReviewForm(value => ({ ...value, accept_score: Number(event.target.value) }))} />
+            </label>
+            <label className="checkbox-field">
+              <input type="checkbox" checked={reviewForm.manual_approval} onChange={event => setReviewForm(value => ({ ...value, manual_approval: event.target.checked }))} />
+              <span>人工审核模式：生成初稿和评审意见后停止，等待我手动修改或确认，不自动应用 AI 修订</span>
+            </label>
+            <button className="primary-button" type="submit" disabled={savingReview}>{savingReview ? '正在保存…' : '保存账户默认'}</button>
+          </form>
+          </>
+        )}
+      </section>
+      <section className="settings-panel">
+        <div className="panel-title">
+          <span className="panel-title-icon neutral"><ShieldCheck size={19} /></span>
+          <div>
+            <h2>评审质量统计</h2>
+            <p>基于最近最多 5000 条正文生成任务；评分和耗时只统计已完成评审的任务。</p>
+          </div>
+        </div>
+        {reviewStats && (
+          <div className="review-config-grid">
+            <div><span>正文生成任务</span><strong>{reviewStats.total_jobs}</strong></div>
+            <div><span>完成评审</span><strong>{reviewStats.reviewed_jobs}</strong></div>
+            <div><span>平均评分</span><strong>{reviewStats.average_score ?? '暂无'}{reviewStats.average_score === null ? '' : ' 分'}</strong></div>
+            <div><span>平均评审轮数</span><strong>{reviewStats.average_rounds ?? '暂无'}{reviewStats.average_rounds === null ? '' : ' 轮'}</strong></div>
+            <div><span>平均任务耗时</span><strong>{reviewStats.average_duration_seconds ?? '暂无'}{reviewStats.average_duration_seconds === null ? '' : ' 秒'}</strong></div>
+            <div><span>评论员不可用</span><strong>{reviewStats.review_unavailable_jobs}</strong></div>
+            <div>
+              <span>修订决策</span>
+              <strong>
+                采纳 {reviewStats.revision_decisions.accepted ?? 0} · 部分采纳 {reviewStats.revision_decisions.partially_accepted ?? 0} · 拒绝 {reviewStats.revision_decisions.rejected ?? 0}
+              </strong>
+            </div>
           </div>
         )}
       </section>

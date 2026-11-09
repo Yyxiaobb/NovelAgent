@@ -83,6 +83,8 @@ export function ProjectDetailPage() {
   const [chapterToRecycle, setChapterToRecycle] = useState<Chapter | null>(null)
   const [recycleProjectOpen, setRecycleProjectOpen] = useState(false)
   const [expandedVolumeIds, setExpandedVolumeIds] = useState<Set<number>>(new Set())
+  const [reviewPreferences, setReviewPreferences] = useState({ enabled: false, max_rounds: 3, accept_score: 85, manual_approval: false })
+  const [savingReviewPreferences, setSavingReviewPreferences] = useState(false)
 
   const nextChapter = chapters.find(chapter => !(chapter.content || '').trim()) || chapters[chapters.length - 1]
   const currentVolume =
@@ -155,6 +157,60 @@ export function ProjectDetailPage() {
   useEffect(() => {
     void loadDetail()
   }, [loadDetail])
+
+  useEffect(() => {
+    const id = Number(projectId)
+    if (!Number.isInteger(id) || id <= 0) return
+    void Promise.all([api.getReviewPreferences(), api.getProjectReviewPreferences(id)])
+      .then(([account, projectOverride]) => {
+        setReviewPreferences({
+          enabled: projectOverride.enabled ?? account.enabled,
+          max_rounds: projectOverride.max_rounds ?? account.max_rounds,
+          accept_score: projectOverride.accept_score ?? account.accept_score,
+          manual_approval: projectOverride.manual_approval ?? account.manual_approval,
+        })
+      })
+      .catch(() => undefined)
+  }, [projectId])
+
+  async function saveProjectReviewPreferences() {
+    if (!project) return
+    setSavingReviewPreferences(true)
+    setNotice('')
+    try {
+      await api.updateProjectReviewPreferences(project.id, reviewPreferences)
+      setNotice('作品评审偏好已保存，生成时将覆盖账户默认设置')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '作品评审偏好保存失败')
+    } finally {
+      setSavingReviewPreferences(false)
+    }
+  }
+
+  async function clearProjectReviewPreferences() {
+    if (!project) return
+    setSavingReviewPreferences(true)
+    try {
+      await api.updateProjectReviewPreferences(project.id, {
+        enabled: null,
+        max_rounds: null,
+        accept_score: null,
+        manual_approval: null,
+      })
+      const defaults = await api.getReviewPreferences()
+      setReviewPreferences({
+        enabled: defaults.enabled,
+        max_rounds: defaults.max_rounds,
+        accept_score: defaults.accept_score,
+        manual_approval: defaults.manual_approval,
+      })
+      setNotice('已清除作品覆盖，恢复使用账户默认')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '清除作品偏好失败')
+    } finally {
+      setSavingReviewPreferences(false)
+    }
+  }
 
   function cancelEditing() {
     if (project) beginEditing(project, chapters)
@@ -713,6 +769,37 @@ export function ProjectDetailPage() {
           {nextChapter && <Link to={`/projects/${project.id}/chapters/${nextChapter.id}`}>继续当前章节</Link>}
           <Link to={`/projects/${project.id}/outline`}>打开规划中心</Link>
         </article>
+      </section>
+
+      <section className="content-section project-review-settings">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">多智能体协作</p>
+            <h2>作品评审偏好</h2>
+            <p>此处设置仅覆盖当前作品；清除后恢复账户默认值。</p>
+          </div>
+        </div>
+        <div className="project-review-controls">
+          <label className="field"><span>评论员</span>
+            <select value={reviewPreferences.enabled ? 'on' : 'off'} onChange={event => setReviewPreferences(value => ({ ...value, enabled: event.target.value === 'on' }))}>
+              <option value="off">关闭</option><option value="on">启用</option>
+            </select>
+          </label>
+          <label className="field"><span>评审轮数</span>
+            <input type="number" min="1" max="3" value={reviewPreferences.max_rounds} onChange={event => setReviewPreferences(value => ({ ...value, max_rounds: Number(event.target.value) }))} />
+          </label>
+          <label className="field"><span>达标分数</span>
+            <input type="number" min="0" max="100" value={reviewPreferences.accept_score} onChange={event => setReviewPreferences(value => ({ ...value, accept_score: Number(event.target.value) }))} />
+          </label>
+          <label className="checkbox-field">
+            <input type="checkbox" checked={reviewPreferences.manual_approval} onChange={event => setReviewPreferences(value => ({ ...value, manual_approval: event.target.checked }))} />
+            <span>人工审核：返回初稿和评审意见，不自动修订</span>
+          </label>
+        </div>
+        <div className="section-heading-actions">
+          <button className="secondary-button" type="button" onClick={() => void clearProjectReviewPreferences()} disabled={savingReviewPreferences}>使用账户默认</button>
+          <button className="primary-button" type="button" onClick={() => void saveProjectReviewPreferences()} disabled={savingReviewPreferences}>{savingReviewPreferences ? '正在保存…' : '保存作品偏好'}</button>
+        </div>
       </section>
 
       <section className="content-section project-state-section">

@@ -25,6 +25,8 @@ import type {
   GenerationReviewIteration,
   RevisionDecision,
   ReviewRuntimeConfig,
+  ReviewStats,
+  ReviewPreferenceUpdate,
 } from '../types'
 
 const TOKEN_KEY = 'novel-agent-token'
@@ -184,6 +186,21 @@ export const tokenStore = {
 
 export const api = {
   getReviewConfig: () => request<ReviewRuntimeConfig>('/api/agent/review/config'),
+  getReviewPreferences: () => request<ReviewRuntimeConfig>('/api/agent/review/preferences'),
+  updateReviewPreferences: (preferences: Pick<ReviewRuntimeConfig, 'enabled' | 'max_rounds' | 'accept_score' | 'manual_approval'>) =>
+    request<ReviewRuntimeConfig>('/api/agent/review/preferences', {
+      method: 'PUT',
+      body: JSON.stringify(preferences),
+    }),
+  getProjectReviewPreferences: (projectId: number) =>
+    request<Partial<ReviewRuntimeConfig>>(`/api/agent/projects/${projectId}/review/preferences`),
+  updateProjectReviewPreferences: (projectId: number, preferences: ReviewPreferenceUpdate) =>
+    request<Partial<ReviewRuntimeConfig>>(`/api/agent/projects/${projectId}/review/preferences`, {
+      method: 'PUT',
+      body: JSON.stringify(preferences),
+    }),
+  getReviewStats: (projectId?: number) =>
+    request<ReviewStats>(`/api/agent/review/stats${projectId ? `?project_id=${projectId}` : ''}`),
   login: (username: string, password: string) =>
     request<AuthData>('/api/user/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   register: (username: string, password: string) =>

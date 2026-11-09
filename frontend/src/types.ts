@@ -241,6 +241,27 @@ export interface ReviewRuntimeConfig {
   reviewer_mode: 'shared' | 'dedicated'
   reviewer_model: string | null
   configuration_status: 'shared' | 'complete' | 'incomplete'
+  manual_approval: boolean
+}
+
+export interface ReviewPreferenceUpdate {
+  enabled?: boolean | null
+  max_rounds?: number | null
+  accept_score?: number | null
+  manual_approval?: boolean | null
+}
+
+export interface ReviewStats {
+  total_jobs: number
+  reviewed_jobs: number
+  review_unavailable_jobs: number
+  average_score: number | null
+  average_rounds: number | null
+  average_duration_seconds: number | null
+  stop_reasons: Record<string, number>
+  revision_decisions: Record<string, number>
+  sample_limit: number
+  generated_at: string
 }
 
 export interface ChapterVersion {

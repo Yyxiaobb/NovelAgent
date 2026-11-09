@@ -101,6 +101,14 @@ class ChapterGenerationRequest(BaseModel):
     expected_words: Optional[int] = Field(None, gt=0, le=100000)
     user_idea: Optional[str] = Field(None, max_length=5000)
     knowledge_base_ids: list[int] = Field(default_factory=list, max_length=10)
+    review_preferences: Optional["ReviewPreferencePayload"] = None
+
+
+class ReviewPreferencePayload(BaseModel):
+    enabled: Optional[bool] = None
+    max_rounds: Optional[int] = Field(None, ge=1, le=3)
+    accept_score: Optional[int] = Field(None, ge=0, le=100)
+    manual_approval: Optional[bool] = None
 
 
 class ChapterGenerationResponse(BaseModel):
