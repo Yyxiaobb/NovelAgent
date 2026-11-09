@@ -24,6 +24,7 @@ import type {
   User,
   GenerationReviewIteration,
   RevisionDecision,
+  ReviewRuntimeConfig,
 } from '../types'
 
 const TOKEN_KEY = 'novel-agent-token'
@@ -182,6 +183,7 @@ export const tokenStore = {
 }
 
 export const api = {
+  getReviewConfig: () => request<ReviewRuntimeConfig>('/api/agent/review/config'),
   login: (username: string, password: string) =>
     request<AuthData>('/api/user/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   register: (username: string, password: string) =>

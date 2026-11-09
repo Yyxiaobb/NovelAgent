@@ -12,6 +12,7 @@ from services.content_review import (
     review_content,
     run_review_loop,
     reviewer_model_settings,
+    review_runtime_config,
 )
 from schemas.projects import ChapterPlan
 
@@ -68,6 +69,32 @@ class ContentReviewTests(unittest.IsolatedAsyncioTestCase):
             os.environ["REVIEW_API_KEY"] = "review-key"
             os.environ["REVIEW_BASE_URL"] = "https://review.test/v1"
             self.assertEqual(reviewer_model_settings(), ("review-model", "review-key", "https://review.test/v1"))
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    def test_review_runtime_config_is_safe_and_reports_incomplete_dedicated_setup(self):
+        import os
+        previous = {name: os.environ.get(name) for name in (
+            "CONTENT_REVIEW_ENABLED", "CONTENT_REVIEW_MAX_ROUNDS", "CONTENT_REVIEW_ACCEPT_SCORE",
+            "REVIEW_MODEL", "REVIEW_API_KEY", "REVIEW_BASE_URL",
+        )}
+        try:
+            os.environ["CONTENT_REVIEW_ENABLED"] = "true"
+            os.environ["CONTENT_REVIEW_MAX_ROUNDS"] = "2"
+            os.environ["CONTENT_REVIEW_ACCEPT_SCORE"] = "88"
+            os.environ["REVIEW_MODEL"] = "review-model"
+            os.environ.pop("REVIEW_API_KEY", None)
+            os.environ["REVIEW_BASE_URL"] = "https://review.test/v1"
+            config = review_runtime_config()
+            self.assertEqual(config["reviewer_mode"], "dedicated")
+            self.assertEqual(config["configuration_status"], "incomplete")
+            self.assertEqual(config["accept_score"], 88)
+            self.assertNotIn("api_key", config)
+            self.assertNotIn("base_url", config)
         finally:
             for name, value in previous.items():
                 if value is None:

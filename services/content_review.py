@@ -93,6 +93,30 @@ def reviewer_model_settings() -> tuple[str | None, str | None, str | None]:
     return model, api_key, base_url
 
 
+def review_runtime_config() -> dict[str, Any]:
+    """Return safe, non-secret review configuration for observability endpoints."""
+    rounds, threshold = review_settings()
+    model, api_key, base_url = reviewer_model_settings()
+    configured_values = [model, api_key, base_url]
+    if not any(configured_values):
+        reviewer_mode = "shared"
+        configuration_status = "shared"
+    elif all(configured_values):
+        reviewer_mode = "dedicated"
+        configuration_status = "complete"
+    else:
+        reviewer_mode = "dedicated"
+        configuration_status = "incomplete"
+    return {
+        "enabled": review_enabled(),
+        "max_rounds": rounds,
+        "accept_score": threshold,
+        "reviewer_mode": reviewer_mode,
+        "reviewer_model": model,
+        "configuration_status": configuration_status,
+    }
+
+
 def _json_candidate(raw: str) -> dict[str, Any]:
     candidate = (raw or "").strip()
     if candidate.startswith("```"):

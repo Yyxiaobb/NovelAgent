@@ -76,6 +76,7 @@ from services.chapter_generation import (
     validate_content_quality,
 )
 from services.chapter_memory_generation import generate_chapter_memory as generate_chapter_memory_for_chapter
+from services.content_review import review_runtime_config
 
 from services.story_memory import build_project_memory_context
 
@@ -87,6 +88,12 @@ from agent.skills import load_skill
 from services.generation_runtime import generation_client
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+
+@router.get("/review/config")
+async def get_review_config(user: User = Depends(get_current_user)):
+    """Expose safe review settings without returning credentials or service URLs."""
+    return success_response(message="获取评审配置成功", data=review_runtime_config())
 
 
 def _chapter_plan_prior_context(chapters: list, *, detailed_count: int = 3) -> str:

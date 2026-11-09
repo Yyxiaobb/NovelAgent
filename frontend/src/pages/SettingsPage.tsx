@@ -1,5 +1,5 @@
 import { Eye, EyeOff, KeyRound, LogOut, ShieldCheck, X } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { api } from '../api/client'
 
@@ -12,6 +12,22 @@ export function SettingsPage() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [changingPassword, setChangingPassword] = useState(false)
+  const [reviewConfig, setReviewConfig] = useState<Awaited<ReturnType<typeof api.getReviewConfig>> | null>(null)
+  const [reviewConfigError, setReviewConfigError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    void api.getReviewConfig()
+      .then(config => {
+        if (active) setReviewConfig(config)
+      })
+      .catch(reason => {
+        if (active) setReviewConfigError(reason instanceof Error ? reason.message : '评审配置读取失败')
+      })
+    return () => {
+      active = false
+    }
+  }, [])
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -130,6 +146,36 @@ export function SettingsPage() {
               </button>
             </div>
           </form>
+        )}
+      </section>
+      <section className="settings-panel">
+        <div className="panel-title">
+          <span className="panel-title-icon neutral">
+            <ShieldCheck size={19} />
+          </span>
+          <div>
+            <h2>章节评审</h2>
+            <p>查看当前服务端的评论员运行配置，密钥和地址不会在页面展示。</p>
+          </div>
+        </div>
+        {reviewConfigError && <div className="form-message error" role="status">{reviewConfigError}</div>}
+        {reviewConfig && (
+          <div className="review-config-grid">
+            <div><span>状态</span><strong>{reviewConfig.enabled ? '已启用' : '未启用'}</strong></div>
+            <div><span>最多轮数</span><strong>{reviewConfig.max_rounds} 轮</strong></div>
+            <div><span>达标分数</span><strong>{reviewConfig.accept_score} 分</strong></div>
+            <div>
+              <span>评论员模型</span>
+              <strong>
+                {reviewConfig.reviewer_mode === 'shared'
+                  ? '复用正文模型'
+                  : reviewConfig.reviewer_model || '独立模型'}
+              </strong>
+            </div>
+            {reviewConfig.configuration_status === 'incomplete' && (
+              <p className="settings-inline-warning">独立评论员配置不完整，将无法正常启动评审。</p>
+            )}
+          </div>
         )}
       </section>
       <section className="settings-panel danger-panel">

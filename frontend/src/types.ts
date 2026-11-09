@@ -234,6 +234,15 @@ export interface RevisionDecision {
   reason: string
 }
 
+export interface ReviewRuntimeConfig {
+  enabled: boolean
+  max_rounds: number
+  accept_score: number
+  reviewer_mode: 'shared' | 'dedicated'
+  reviewer_model: string | null
+  configuration_status: 'shared' | 'complete' | 'incomplete'
+}
+
 export interface ChapterVersion {
   id: number
   chapter_id: number

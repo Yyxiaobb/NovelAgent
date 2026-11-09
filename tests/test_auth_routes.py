@@ -46,6 +46,10 @@ class AuthRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cookie.has_nonstandard_attr("HttpOnly"))
         self.assertIn("Max-Age=86400", registered.headers["set-cookie"])
         self.assertEqual((await self.client.get("/api/user/info")).status_code, 200)
+        review_config = await self.client.get("/api/agent/review/config")
+        self.assertEqual(review_config.status_code, 200)
+        self.assertIn("enabled", review_config.json()["data"])
+        self.assertNotIn("api_key", review_config.json()["data"])
         projects_response = await self.client.get("/api/project/projects")
         self.assertEqual(projects_response.status_code, 200)
         self.assertEqual(projects_response.json()["data"], [])
@@ -54,6 +58,7 @@ class AuthRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(logged_out.status_code, 200)
         self.assertNotIn("novel-agent-session", self.client.cookies)
         self.assertEqual((await self.client.get("/api/user/info")).status_code, 401)
+        self.assertEqual((await self.client.get("/api/agent/review/config")).status_code, 401)
 
         logged_in = await self.client.post("/api/user/login", json=credentials)
         self.assertEqual(logged_in.status_code, 200)
