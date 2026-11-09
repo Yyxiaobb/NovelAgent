@@ -2393,6 +2393,47 @@ p {
   color: var(--muted);
   font-size: 11px;
 }
+.review-decisions {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.review-decisions h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+}
+.review-decision-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.review-decision-list li {
+  display: grid;
+  gap: 3px;
+  padding: 7px 8px;
+  background: var(--surface);
+  border-radius: 4px;
+}
+.review-decision-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.review-decision-heading span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.review-decision-list p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
 .generation-history-actions {
   display: flex;
   flex: 0 0 auto;

@@ -676,6 +676,28 @@ export function ChapterDetailPage() {
                                     )}
                                   </section>
                                 ))}
+                                {job.generation_info?.revision_decisions && job.generation_info.revision_decisions.length > 0 && (
+                                  <section className="review-decisions">
+                                    <h4>修订决策</h4>
+                                    <ul className="review-decision-list">
+                                      {job.generation_info.revision_decisions.map((decision, index) => (
+                                        <li key={`${job.job_id}-${decision.issue_id}-${index}`}>
+                                          <div className="review-decision-heading">
+                                            <strong>
+                                              {decision.decision === 'accepted'
+                                                ? '已采纳'
+                                                : decision.decision === 'partially_accepted'
+                                                  ? '部分采纳'
+                                                  : '已拒绝'}
+                                            </strong>
+                                            <span>{decision.issue_id}</span>
+                                          </div>
+                                          <p>{decision.reason}</p>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </section>
+                                )}
                               </div>
                             )}
                           {job.error && <p className="error-copy">{job.error}</p>}

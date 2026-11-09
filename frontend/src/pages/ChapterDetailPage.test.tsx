@@ -238,6 +238,10 @@ describe('章节详情页', () => {
           review_rounds: 2,
           review_final_score: 88,
           review_stop_reason: 'threshold_reached',
+          revision_decisions: [
+            { issue_id: 'issue-1', decision: 'partially_accepted', reason: '保留伏笔，只增加一处对话' },
+            { issue_id: 'issue-2', decision: 'rejected', reason: '会破坏主线节奏，暂不调整' },
+          ],
           review_history: [
             {
               round: 1,
@@ -284,6 +288,10 @@ describe('章节详情页', () => {
     expect(screen.getByText('第 1 轮评审')).toBeTruthy()
     expect(screen.getByText('增加动作和对话')).toBeTruthy()
     expect(screen.getByText('整体达到交付标准')).toBeTruthy()
+    expect(screen.getAllByText('修订决策')).toHaveLength(1)
+    expect(screen.getByText('部分采纳')).toBeTruthy()
+    expect(screen.getByText('保留伏笔，只增加一处对话')).toBeTruthy()
+    expect(screen.getByText('已拒绝')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: '收起评审详情' }))
     expect(screen.queryByText('整体达到交付标准')).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: '用作章节草稿' }))

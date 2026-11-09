@@ -195,6 +195,7 @@ export interface GenerationJob {
     review_stop_reason?: string
     review_error?: string | null
     review_history?: GenerationReviewIteration[]
+    revision_decisions?: RevisionDecision[]
   }
   error: string | null
   created_at: string
@@ -224,6 +225,12 @@ export interface GenerationReviewIteration {
   round: number
   score: number
   review: GenerationReview
+}
+
+export interface RevisionDecision {
+  issue_id: string
+  decision: 'accepted' | 'partially_accepted' | 'rejected'
+  reason: string
 }
 
 export interface ChapterVersion {

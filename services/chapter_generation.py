@@ -29,6 +29,7 @@ from services.content_review import (
     revision_messages,
     review_enabled,
     run_review_loop,
+    parse_revision_output,
 )
 from services.generation_runtime import reviewer_client
 
@@ -330,17 +331,18 @@ async def generate_reviewed_content(
             model_name = client.model
             yield client
 
-    async def generate_candidate(client: Any, previous: str | None, review: Any | None) -> str:
+    async def generate_candidate(client: Any, previous: str | None, review: Any | None):
         if previous is None:
             return await _generate_complete_with_client(context, client, content_token_fn)
         messages = revision_messages(context, previous, review)
-        revised = (await client.achat(
+        raw_revision = await client.achat(
             messages,
             temperature=0.7,
             max_tokens=content_token_fn(context.plan.expected_words),
-        )).strip()
+        )
+        revised, decisions = parse_revision_output(raw_revision)
         validate_content_quality(revised, context.plan.expected_words)
-        return revised
+        return revised, decisions
 
     async with client_factory() as initial_client:
         model_name = initial_client.model

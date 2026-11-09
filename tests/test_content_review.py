@@ -8,6 +8,7 @@ from schemas.agent import ContentReview
 from services.chapter_generation import validate_content_quality
 from services.content_review import (
     is_review_acceptable,
+    parse_revision_output,
     review_content,
     run_review_loop,
     reviewer_model_settings,
@@ -73,6 +74,20 @@ class ContentReviewTests(unittest.IsolatedAsyncioTestCase):
                     os.environ.pop(name, None)
                 else:
                     os.environ[name] = value
+
+    def test_revision_output_records_acceptance_decisions_and_supports_plain_text_fallback(self):
+        structured = json.dumps({
+            "content": self.content,
+            "revision_decisions": [
+                {"issue_id": "issue-1", "decision": "rejected", "reason": "会破坏后续伏笔"},
+            ],
+        }, ensure_ascii=False)
+        content, decisions = parse_revision_output(structured)
+        self.assertEqual(content, self.content)
+        self.assertEqual(decisions[0].decision, "rejected")
+        plain_content, plain_decisions = parse_revision_output(self.content)
+        self.assertEqual(plain_content, self.content)
+        self.assertEqual(plain_decisions, [])
 
     async def test_loop_keeps_best_version_after_revision_scores_lower(self):
         review_outputs = [self.review_json(70, stop=False), self.review_json(80, stop=False)]

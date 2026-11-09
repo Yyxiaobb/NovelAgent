@@ -116,6 +116,7 @@ class ChapterGenerationResponse(BaseModel):
     review_stop_reason: Optional[str] = None
     review_error: Optional[str] = None
     review_history: list[dict] = Field(default_factory=list)
+    revision_decisions: list[dict] = Field(default_factory=list)
 
 
 ReviewIssueCategory = Literal[
@@ -153,6 +154,17 @@ class ContentReview(BaseModel):
         if any(key not in allowed or score < 0 or score > 100 for key, score in value.items()):
             raise ValueError("dimension_scores must contain only 0-100 scores for known dimensions")
         return value
+
+
+class RevisionDecision(BaseModel):
+    issue_id: str = Field(..., min_length=1, max_length=80)
+    decision: Literal["accepted", "partially_accepted", "rejected"]
+    reason: str = Field(..., min_length=1, max_length=1000)
+
+
+class RevisionOutput(BaseModel):
+    content: str = Field(..., min_length=1, max_length=100000)
+    revision_decisions: list[RevisionDecision] = Field(default_factory=list, max_length=20)
 
 
 class ChapterMemoryGenerationRequest(BaseModel):
