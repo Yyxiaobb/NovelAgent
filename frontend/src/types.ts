@@ -194,12 +194,36 @@ export interface GenerationJob {
     review_final_score?: number | null
     review_stop_reason?: string
     review_error?: string | null
-    review_history?: Array<Record<string, unknown>>
+    review_history?: GenerationReviewIteration[]
   }
   error: string | null
   created_at: string
   updated_at: string
   finished_at: string | null
+}
+
+export interface GenerationReviewIssue {
+  id: string
+  category: string
+  severity: string
+  evidence: string
+  suggestion: string
+  must_fix: boolean
+}
+
+export interface GenerationReview {
+  overall_score: number
+  summary: string
+  strengths: string[]
+  issues: GenerationReviewIssue[]
+  dimension_scores: Record<string, number>
+  stop_recommendation: boolean
+}
+
+export interface GenerationReviewIteration {
+  round: number
+  score: number
+  review: GenerationReview
 }
 
 export interface ChapterVersion {
