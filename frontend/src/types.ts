@@ -193,12 +193,75 @@ export interface GenerationJob {
     review_rounds?: number
     review_final_score?: number | null
     review_stop_reason?: string
-    review_history?: Array<Record<string, unknown>>
+    review_error?: string | null
+    review_history?: GenerationReviewIteration[]
+    revision_decisions?: RevisionDecision[]
   }
   error: string | null
   created_at: string
   updated_at: string
   finished_at: string | null
+}
+
+export interface GenerationReviewIssue {
+  id: string
+  category: string
+  severity: string
+  evidence: string
+  suggestion: string
+  must_fix: boolean
+}
+
+export interface GenerationReview {
+  overall_score: number
+  summary: string
+  strengths: string[]
+  issues: GenerationReviewIssue[]
+  dimension_scores: Record<string, number>
+  stop_recommendation: boolean
+}
+
+export interface GenerationReviewIteration {
+  round: number
+  score: number
+  review: GenerationReview
+}
+
+export interface RevisionDecision {
+  round?: number | null
+  issue_id: string
+  decision: 'accepted' | 'partially_accepted' | 'rejected'
+  reason: string
+}
+
+export interface ReviewRuntimeConfig {
+  enabled: boolean
+  max_rounds: number
+  accept_score: number
+  reviewer_mode: 'shared' | 'dedicated'
+  reviewer_model: string | null
+  configuration_status: 'shared' | 'complete' | 'incomplete'
+  manual_approval: boolean
+}
+
+export interface ReviewPreferenceUpdate {
+  enabled?: boolean | null
+  max_rounds?: number | null
+  accept_score?: number | null
+  manual_approval?: boolean | null
+}
+
+export interface ReviewStats {
+  total_jobs: number
+  reviewed_jobs: number
+  review_unavailable_jobs: number
+  average_score: number | null
+  average_rounds: number | null
+  average_duration_seconds: number | null
+  stop_reasons: Record<string, number>
+  revision_decisions: Record<string, number>
+  sample_limit: number
+  generated_at: string
 }
 
 export interface ChapterVersion {

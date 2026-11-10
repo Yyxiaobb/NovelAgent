@@ -13,7 +13,15 @@ import {
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
-import type { Chapter, ChapterMemory, ChapterPlan, ChapterVersion, GenerationJob, KnowledgeCitation } from '../types'
+import type {
+  Chapter,
+  ChapterMemory,
+  ChapterPlan,
+  ChapterVersion,
+  GenerationJob,
+  GenerationReviewIteration,
+  KnowledgeCitation,
+} from '../types'
 import { KnowledgeBaseSelector } from '../components/KnowledgeBaseSelector'
 import { KnowledgeCitationList } from '../components/KnowledgeCitationList'
 import { DraftRecoveryBanner } from '../components/DraftRecoveryBanner'
@@ -68,6 +76,35 @@ function parseChapterPlan(text: string, expectedWords: number, current: ChapterP
   }
 }
 
+function ReviewIterationCard({ iteration, heading }: { iteration: GenerationReviewIteration; heading: string }) {
+  return (
+    <section className="review-iteration">
+      <div className="review-iteration-heading">
+        <strong>{heading}</strong>
+        <span>{iteration.score} 分</span>
+      </div>
+      <p>{iteration.review.summary}</p>
+      {Object.keys(iteration.review.dimension_scores).length > 0 && (
+        <div className="review-dimension-list">
+          {Object.entries(iteration.review.dimension_scores).map(([name, score]) => (
+            <span key={name}>{name}：{score}</span>
+          ))}
+        </div>
+      )}
+      {iteration.review.issues.length > 0 && (
+        <ul className="review-issue-list">
+          {iteration.review.issues.map(issue => (
+            <li key={issue.id}>
+              <strong>{issue.must_fix ? '必须修复 · ' : ''}{issue.suggestion}</strong>
+              <span>{issue.evidence}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 export function ChapterDetailPage() {
   const { projectId, chapterId, feature } = useParams()
   const location = useLocation()
@@ -99,7 +136,9 @@ export function ChapterDetailPage() {
   const [planGenerating, setPlanGenerating] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [generationReview, setGenerationReview] = useState<GenerationReviewIteration[]>([])
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([])
+  const [expandedReviewJobs, setExpandedReviewJobs] = useState<Set<string>>(new Set())
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [versions, setVersions] = useState<ChapterVersion[]>([])
@@ -251,6 +290,15 @@ export function ChapterDetailPage() {
     } finally {
       setRetryingJob(null)
     }
+  }
+
+  function toggleReviewDetails(jobId: string) {
+    setExpandedReviewJobs(current => {
+      const next = new Set(current)
+      if (next.has(jobId)) next.delete(jobId)
+      else next.add(jobId)
+      return next
+    })
   }
 
   const loadVersions = useCallback(async () => {
@@ -474,6 +522,7 @@ export function ChapterDetailPage() {
     setGenerating(true)
     setGenerationProgress(0)
     setGenerationError('')
+    setGenerationReview([])
     setDraft(current => ({ ...current, content: '' }))
     try {
       const plan = parseChapterPlan(planTextDraft, words, planDraft)
@@ -496,8 +545,15 @@ export function ChapterDetailPage() {
             : await api.generateChapterContent(chapter.project_id, chapter.id, plan, generationIdea)
       setDraft(current => ({ ...current, content: result.content }))
       setKnowledgeCitations(result.citations || [])
+      setGenerationReview(result.review_history || [])
       setGenerationDialogOpen(false)
-      setNotice('章节正文已生成，请检查后点击“保存修改”入库')
+      setNotice(
+        result.review_enabled
+          ? result.review_stop_reason === 'manual_approval_required'
+            ? `人工审核已暂停自动修订：评论员评分 ${result.review_final_score ?? '未评分'} 分。请查看评审意见并手动修改后保存。`
+            : `章节正文已生成，评论员最终评分 ${result.review_final_score ?? '未评分'} 分（${result.review_rounds ?? 0} 轮），请检查后点击“保存修改”入库`
+          : '章节正文已生成，请检查后点击“保存修改”入库',
+      )
     } catch (reason) {
       setGenerationError(reason instanceof Error ? reason.message : '章节生成失败，请稍后重试')
     } finally {
@@ -609,12 +665,74 @@ export function ChapterDetailPage() {
                             </small>
                           )}
                           {job.generation_info?.review_enabled && (
-                            <small>
-                              评论员评审：{job.generation_info.review_final_score ?? '未评分'} 分 ·{' '}
-                              {job.generation_info.review_rounds ?? 0} 轮 ·{' '}
-                              {job.generation_info.review_stop_reason === 'threshold_reached' ? '达到阈值' : '达到轮次上限'}
-                            </small>
+                            <>
+                              <small>
+                                评论员评审：{job.generation_info.review_final_score ?? '未评分'} 分 ·{' '}
+                                {job.generation_info.review_rounds ?? 0} 轮 ·{' '}
+                                {job.generation_info.review_stop_reason === 'threshold_reached'
+                                  ? '达到阈值'
+                                  : job.generation_info.review_stop_reason === 'manual_approval_required'
+                                    ? '等待人工审核，未自动修订'
+                                  : job.generation_info.review_stop_reason === 'review_unavailable'
+                                    ? '评论员不可用，保留初稿'
+                                    : '达到轮次上限'}
+                                {job.generation_info.review_error ? ` · ${job.generation_info.review_error}` : ''}
+                              </small>
+                              {job.generation_info.review_history && job.generation_info.review_history.length > 0 && (
+                                <button
+                                  className="text-button review-details-toggle"
+                                  type="button"
+                                  onClick={() => toggleReviewDetails(job.job_id)}
+                                  aria-expanded={expandedReviewJobs.has(job.job_id)}
+                                >
+                                  {expandedReviewJobs.has(job.job_id) ? '收起评审详情' : '查看评审详情'}
+                                </button>
+                              )}
+                            </>
                           )}
+                          {job.generation_info?.review_enabled &&
+                            expandedReviewJobs.has(job.job_id) &&
+                            job.generation_info.review_history && (
+                              <div className="review-history-details">
+                                {job.generation_info.review_history.map(iteration => (
+                                  <ReviewIterationCard
+                                    key={`${job.job_id}-${iteration.round}`}
+                                    iteration={iteration}
+                                    heading={`第 ${iteration.round} 轮评审`}
+                                  />
+                                ))}
+                                {job.generation_info?.revision_decisions && job.generation_info.revision_decisions.length > 0 && (
+                                  <section className="review-decisions">
+                                    <h4>修订决策</h4>
+                                    {[...new Set(job.generation_info.revision_decisions.map(decision => decision.round ?? 0))].map(round => (
+                                      <div className="review-decision-round" key={`${job.job_id}-decision-round-${round}`}>
+                                        <strong>{round > 0 ? `第 ${round} 轮修订` : '修订决策'}</strong>
+                                        <ul className="review-decision-list">
+                                          {(job.generation_info?.revision_decisions ?? [])
+                                            .map((decision, index) => ({ decision, index }))
+                                            .filter(({ decision }) => (decision.round ?? 0) === round)
+                                            .map(({ decision, index }) => (
+                                              <li key={`${job.job_id}-${decision.issue_id}-${index}`}>
+                                                <div className="review-decision-heading">
+                                                  <strong>
+                                                    {decision.decision === 'accepted'
+                                                      ? '已采纳'
+                                                      : decision.decision === 'partially_accepted'
+                                                        ? '部分采纳'
+                                                        : '已拒绝'}
+                                                  </strong>
+                                                  <span>{decision.issue_id}</span>
+                                                </div>
+                                                <p>{decision.reason}</p>
+                                              </li>
+                                            ))}
+                                        </ul>
+                                      </div>
+                                    ))}
+                                  </section>
+                                )}
+                              </div>
+                            )}
                           {job.error && <p className="error-copy">{job.error}</p>}
                         </div>
                         <div className="generation-history-actions">
@@ -804,6 +922,18 @@ export function ChapterDetailPage() {
             <div className="form-message success page-notice" role="status">
               {notice}
             </div>
+          )}
+          {generationReview.length > 0 && (
+            <section className="content-section review-history-details" aria-label="本次生成的编辑评审">
+              <h2>本次生成的编辑评审</h2>
+              {generationReview.map(iteration => (
+                <ReviewIterationCard
+                  key={`current-review-${iteration.round}`}
+                  iteration={iteration}
+                  heading={`第 ${iteration.round} 轮评审`}
+                />
+              ))}
+            </section>
           )}
           {draftProtection.recovery && (
             <DraftRecoveryBanner

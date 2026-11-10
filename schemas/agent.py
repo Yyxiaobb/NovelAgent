@@ -101,6 +101,14 @@ class ChapterGenerationRequest(BaseModel):
     expected_words: Optional[int] = Field(None, gt=0, le=100000)
     user_idea: Optional[str] = Field(None, max_length=5000)
     knowledge_base_ids: list[int] = Field(default_factory=list, max_length=10)
+    review_preferences: Optional["ReviewPreferencePayload"] = None
+
+
+class ReviewPreferencePayload(BaseModel):
+    enabled: Optional[bool] = None
+    max_rounds: Optional[int] = Field(None, ge=1, le=3)
+    accept_score: Optional[int] = Field(None, ge=0, le=100)
+    manual_approval: Optional[bool] = None
 
 
 class ChapterGenerationResponse(BaseModel):
@@ -114,7 +122,9 @@ class ChapterGenerationResponse(BaseModel):
     review_rounds: int = 0
     review_final_score: Optional[int] = None
     review_stop_reason: Optional[str] = None
+    review_error: Optional[str] = None
     review_history: list[dict] = Field(default_factory=list)
+    revision_decisions: list[dict] = Field(default_factory=list)
 
 
 ReviewIssueCategory = Literal[
@@ -152,6 +162,18 @@ class ContentReview(BaseModel):
         if any(key not in allowed or score < 0 or score > 100 for key, score in value.items()):
             raise ValueError("dimension_scores must contain only 0-100 scores for known dimensions")
         return value
+
+
+class RevisionDecision(BaseModel):
+    round: Optional[int] = Field(default=None, ge=1, le=3)
+    issue_id: str = Field(..., min_length=1, max_length=80)
+    decision: Literal["accepted", "partially_accepted", "rejected"]
+    reason: str = Field(..., min_length=1, max_length=1000)
+
+
+class RevisionOutput(BaseModel):
+    content: str = Field(..., min_length=1, max_length=100000)
+    revision_decisions: list[RevisionDecision] = Field(default_factory=list, max_length=20)
 
 
 class ChapterMemoryGenerationRequest(BaseModel):

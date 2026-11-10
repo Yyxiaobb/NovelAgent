@@ -233,6 +233,45 @@ describe('章节详情页', () => {
         created_at: '2026-10-17T09:00:00',
         updated_at: '2026-10-17T09:00:00',
         finished_at: '2026-10-17T09:00:00',
+        generation_info: {
+          review_enabled: true,
+          review_rounds: 2,
+          review_final_score: 88,
+          review_stop_reason: 'threshold_reached',
+          revision_decisions: [
+            { round: 1, issue_id: 'issue-1', decision: 'partially_accepted', reason: '保留伏笔，只增加一处对话' },
+            { round: 1, issue_id: 'issue-2', decision: 'rejected', reason: '会破坏主线节奏，暂不调整' },
+          ],
+          review_history: [
+            {
+              round: 1,
+              score: 76,
+              review: {
+                overall_score: 76,
+                summary: '中段节奏略慢',
+                strengths: ['结尾钩子清晰'],
+                issues: [{
+                  id: 'issue-1', category: 'pacing', severity: 'major', evidence: '连续说明较多',
+                  suggestion: '增加动作和对话', must_fix: false,
+                }],
+                dimension_scores: { pacing: 68, ending: 88 },
+                stop_recommendation: false,
+              },
+            },
+            {
+              round: 2,
+              score: 88,
+              review: {
+                overall_score: 88,
+                summary: '整体达到交付标准',
+                strengths: ['冲突推进自然'],
+                issues: [],
+                dimension_scores: { pacing: 82, ending: 90 },
+                stop_recommendation: true,
+              },
+            },
+          ],
+        },
       },
     ])
     renderPage()
@@ -244,6 +283,18 @@ describe('章节详情页', () => {
     expect(await screen.findByRole('heading', { name: '启航' })).toBeTruthy()
     await userEvent.click(screen.getByRole('link', { name: '生成历史' }))
     expect(await screen.findByRole('heading', { name: '正文生成历史' })).toBeTruthy()
+    expect(screen.getByText(/评论员评审：88 分/)).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: '查看评审详情' }))
+    expect(screen.getByText('第 1 轮评审')).toBeTruthy()
+    expect(screen.getByText('增加动作和对话')).toBeTruthy()
+    expect(screen.getByText('整体达到交付标准')).toBeTruthy()
+    expect(screen.getAllByText('修订决策')).toHaveLength(1)
+    expect(screen.getByText('第 1 轮修订')).toBeTruthy()
+    expect(screen.getByText('部分采纳')).toBeTruthy()
+    expect(screen.getByText('保留伏笔，只增加一处对话')).toBeTruthy()
+    expect(screen.getByText('已拒绝')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: '收起评审详情' }))
+    expect(screen.queryByText('整体达到交付标准')).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: '用作章节草稿' }))
     expect(((await screen.findByLabelText('章节内容')) as HTMLTextAreaElement).value).toBe('历史生成的正文')
   })

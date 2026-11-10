@@ -25,6 +25,7 @@ from crud import versions as chapter_versions
 from crud import generation as generation_crud
 
 from crud import story_memory as story_memory_crud
+from crud import review_preferences as review_preferences_crud
 
 from models.users import User
 from models.projects import Chapter
@@ -39,6 +40,7 @@ from schemas.agent import (
     RollingChapterPlanGenerationRequest,
     RollingChapterPlanGenerationResponse,
     RollingChapterPlanItem,
+    ReviewPreferencePayload,
 )
 
 from schemas.projects import ChapterPlan
@@ -68,7 +70,6 @@ from services.agent_generation import (
 from services.chapter_generation import (
     ContentQualityError,
     prepare_content_context,
-    generate_content,
     generate_reviewed_content,
     review_enabled,
     stream_content,
@@ -76,6 +77,7 @@ from services.chapter_generation import (
     validate_content_quality,
 )
 from services.chapter_memory_generation import generate_chapter_memory as generate_chapter_memory_for_chapter
+from services.content_review import review_runtime_config, summarize_review_jobs
 
 from services.story_memory import build_project_memory_context
 
@@ -87,6 +89,70 @@ from agent.skills import load_skill
 from services.generation_runtime import generation_client
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+
+@router.get("/review/config")
+async def get_review_config(user: User = Depends(get_current_user)):
+    """Expose safe review settings without returning credentials or service URLs."""
+    return success_response(message="获取评审配置成功", data=review_runtime_config())
+
+
+@router.get("/review/preferences")
+async def get_review_preferences(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    record = await review_preferences_crud.get_preferences(db, user.id)
+    preferences = review_preferences_crud.preference_values(record)
+    return success_response(message="获取评审偏好成功", data={**review_runtime_config(preferences), **preferences})
+
+
+@router.put("/review/preferences")
+async def put_review_preferences(
+    payload: ReviewPreferencePayload,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    record = await review_preferences_crud.save_preferences(db, user.id, payload.model_dump(exclude_unset=True))
+    preferences = review_preferences_crud.preference_values(record)
+    return success_response(message="账户评审偏好已保存", data={**review_runtime_config(preferences), **preferences})
+
+
+@router.get("/projects/{project_id}/review/preferences")
+async def get_project_review_preferences(
+    project_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if await projects.get_project(db, project_id, user.id) is None:
+        raise HTTPException(status_code=404, detail="作品不存在或无权访问")
+    record = await review_preferences_crud.get_preferences(db, user.id, project_id)
+    return success_response(message="获取作品评审偏好成功", data=review_preferences_crud.preference_values(record))
+
+
+@router.put("/projects/{project_id}/review/preferences")
+async def put_project_review_preferences(
+    project_id: int,
+    payload: ReviewPreferencePayload,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if await projects.get_project(db, project_id, user.id) is None:
+        raise HTTPException(status_code=404, detail="作品不存在或无权访问")
+    record = await review_preferences_crud.save_preferences(
+        db, user.id, payload.model_dump(exclude_unset=True), project_id,
+    )
+    return success_response(message="作品评审偏好已保存", data=review_preferences_crud.preference_values(record))
+
+
+@router.get("/review/stats")
+async def get_review_stats(
+    project_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return review quality and runtime metrics for the signed-in user's work."""
+    if project_id is not None and await projects.get_project(db, project_id, user.id) is None:
+        raise HTTPException(status_code=404, detail="作品不存在或无权访问")
+    jobs = await generation_crud.list_review_jobs(db, user.id, project_id=project_id)
+    return success_response(message="获取评审统计成功", data=summarize_review_jobs(jobs))
 
 
 def _chapter_plan_prior_context(chapters: list, *, detailed_count: int = 3) -> str:
@@ -123,6 +189,7 @@ async def generate_chapter_content(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    payload.review_preferences = await review_preferences_crud.resolve_preferences(db, user.id, project_id)
     context_started = perf_counter()
     context = await prepare_content_context(db, project_id, chapter_id, user.id, payload)
     project, chapter, plan, prompt, citations = (
@@ -139,6 +206,7 @@ async def generate_chapter_content(
         model_started = perf_counter()
         content, model, review_result = await generate_reviewed_content(
             context, generation_client, _content_max_tokens,
+            review_preferences=payload.review_preferences,
         )
         log_generation_metric(
             "model_complete",
@@ -186,6 +254,7 @@ async def stream_chapter_content(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    payload.review_preferences = await review_preferences_crud.resolve_preferences(db, user.id, project_id)
     context_started = perf_counter()
     context = await prepare_content_context(db, project_id, chapter_id, user.id, payload)
     project, chapter, plan, prompt, citations = (
@@ -211,9 +280,10 @@ async def stream_chapter_content(
             client_model = client.model
 
         try:
-            if review_enabled():
+            if review_enabled(payload.review_preferences):
                 reviewed_content, reviewed_model, review_result = await generate_reviewed_content(
                     context, generation_client, _content_max_tokens,
+                    review_preferences=payload.review_preferences,
                 )
                 client_model = reviewed_model
                 generated_parts.append(reviewed_content)
@@ -281,6 +351,7 @@ async def start_chapter_content_job(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    payload.review_preferences = await review_preferences_crud.resolve_preferences(db, user.id, project_id)
     await prepare_content_context(db, project_id, chapter_id, user.id, payload)
     job_id = uuid.uuid4().hex
     await generation_crud.create_chapter_content_job(
@@ -328,7 +399,7 @@ async def get_chapter_content_job(job_id: str, user: User = Depends(get_current_
                 key: result.get(key)
                 for key in (
                     "model", "prompt_template_id", "prompt_template_version", "segments", "quality_check",
-                    "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_history",
+                    "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_error", "review_history", "revision_decisions",
                 )
                 if result.get(key) is not None
             },
@@ -370,7 +441,7 @@ async def list_chapter_content_jobs(
                     key: (job.result or {}).get(key)
                     for key in (
                         "model", "prompt_template_id", "prompt_template_version", "segments", "quality_check",
-                        "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_history",
+                        "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_error", "review_history", "revision_decisions",
                     )
                     if (job.result or {}).get(key) is not None
                 },

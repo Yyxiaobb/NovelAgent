@@ -3,7 +3,7 @@ import json
 import re
 import math
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -29,7 +29,9 @@ from services.content_review import (
     revision_messages,
     review_enabled,
     run_review_loop,
+    parse_revision_output,
 )
+from services.generation_runtime import reviewer_client
 
 
 @dataclass(frozen=True)
@@ -310,9 +312,12 @@ async def generate_reviewed_content(
     context: ChapterContentContext,
     client_factory: Callable,
     content_token_fn: Callable[[int], int],
+    *,
+    on_review_iteration: Callable[[Any], Awaitable[None]] | None = None,
+    review_preferences: dict[str, Any] | None = None,
 ) -> tuple[str, str, ReviewLoopResult | None]:
     """Generate content and optionally run the bounded editorial review loop."""
-    if not review_enabled():
+    if not review_enabled(review_preferences):
         content, model = await generate_content(context, client_factory, content_token_fn)
         return content, model, None
 
@@ -327,24 +332,43 @@ async def generate_reviewed_content(
             model_name = client.model
             yield client
 
-    async def generate_candidate(client: Any, previous: str | None, review: Any | None) -> str:
+    async def generate_candidate(client: Any, previous: str | None, review: Any | None):
         if previous is None:
             return await _generate_complete_with_client(context, client, content_token_fn)
         messages = revision_messages(context, previous, review)
-        revised = (await client.achat(
+        raw_revision = await client.achat(
             messages,
             temperature=0.7,
             max_tokens=content_token_fn(context.plan.expected_words),
-        )).strip()
+        )
+        revised, decisions = parse_revision_output(raw_revision)
         validate_content_quality(revised, context.plan.expected_words)
-        return revised
+        return revised, decisions
 
-    result = await run_review_loop(
-        context,
-        tracked_client_factory,
-        generate_candidate,
-        lambda content: validate_content_quality(content, context.plan.expected_words),
-    )
+    async with client_factory() as initial_client:
+        model_name = initial_client.model
+        initial_content = await _generate_complete_with_client(context, initial_client, content_token_fn)
+    try:
+        result = await run_review_loop(
+            context,
+            tracked_client_factory,
+            generate_candidate,
+            lambda content: validate_content_quality(content, context.plan.expected_words),
+            reviewer_client_factory=reviewer_client,
+            initial_content=initial_content,
+            on_iteration=on_review_iteration,
+            preferences=review_preferences,
+        )
+    except Exception as error:
+        if isinstance(error, ContentQualityError):
+            raise
+        # A reviewer outage must not discard a valid generated draft. Return it
+        # with an explicit degraded result so callers can surface the reason.
+        degraded = ReviewLoopResult(
+            content=initial_content, review=None, history=[], rounds=0,
+            stop_reason="review_unavailable", review_error="评论员暂时不可用，已返回未评审初稿",
+        )
+        return initial_content, model_name or "unknown", degraded
     return result.content, model_name or "unknown", result
 
 
@@ -401,18 +425,40 @@ async def run_content_job(
             last_persisted = asyncio.get_running_loop().time()
             model_name = None
 
-            if review_enabled():
+            if review_enabled(payload.review_preferences):
                 reviewed_content = None
                 review_result = None
+                persisted_review_history: list[dict[str, Any]] = []
+
+                async def persist_review_iteration(iteration: Any) -> None:
+                    current_status = await db.scalar(
+                        select(GenerationJob.status).where(GenerationJob.id == job_id)
+                    )
+                    if current_status == "cancelled":
+                        raise asyncio.CancelledError
+                    persisted_review_history.append(iteration.as_dict())
+                    job.progress = min(95, 20 + iteration.round * 25)
+                    job.result = {
+                        **(job.result or {}),
+                        "review_enabled": True,
+                        "review_rounds": iteration.round,
+                        "review_final_score": iteration.score,
+                        "review_history": persisted_review_history,
+                    }
+                    await db.commit()
+
                 for attempt in range(BACKGROUND_GENERATION_ATTEMPTS):
                     current_status = await db.scalar(
                         select(GenerationJob.status).where(GenerationJob.id == job_id)
                     )
                     if current_status == "cancelled":
                         return
+                    persisted_review_history.clear()
                     try:
                         reviewed_content, model_name, review_result = await generate_reviewed_content(
                             context, client_factory, content_token_fn,
+                            on_review_iteration=persist_review_iteration,
+                            review_preferences=payload.review_preferences,
                         )
                     except LLMRequestError as error:
                         if attempt + 1 >= BACKGROUND_GENERATION_ATTEMPTS or not is_retryable_generation_error(error):

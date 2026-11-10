@@ -55,7 +55,11 @@ CONTENT_REVIEW_MAX_ROUNDS=3
 CONTENT_REVIEW_ACCEPT_SCORE=85
 ```
 
+如果希望评论员使用独立模型，可以同时配置 `REVIEW_MODEL`、`REVIEW_API_KEY` 和 `REVIEW_BASE_URL`；三项必须完整提供。评论员配置缺失或暂时不可用时，系统保留有效初稿并在结果中标记 `review_stop_reason=review_unavailable`，不会因为评论员故障丢弃正文。
+
 同步正文接口会在响应中返回 `review_enabled`、`review_rounds`、`review_final_score`、`review_stop_reason` 和 `review_history`。后台正文任务会把同样的评审记录写入任务 `result`。SSE 接口暂时保持原有流式协议，避免把尚未经过评审的中间稿误认为最终稿。
+
+后台任务每完成一轮评审都会保存当前评审历史和进度，并在下一轮开始前检查取消状态；用户取消任务后不会继续发起后续修订请求。章节生成历史页可以展开查看各轮评分、维度分数、编辑建议和每条修订决策。登录后的“设置”页面还会展示当前评审是否启用、轮数上限、达标分数和评论员模型模式；该页面不会返回 API Key 或服务地址。评审配置仍由服务端 `.env` 控制，修改后需重启 API 和 Worker。
 
 ## 知识库与 RAG 配置
 

@@ -2324,6 +2324,124 @@ p {
   color: var(--muted);
   font-size: 11px;
 }
+.review-details-toggle {
+  width: fit-content;
+  padding: 0;
+  color: var(--accent, #28776e);
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+  cursor: pointer;
+}
+.review-history-details {
+  display: grid;
+  gap: 10px;
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.review-iteration {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.review-iteration-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+.review-iteration-heading span {
+  color: var(--accent, #28776e);
+  font-weight: 700;
+}
+.review-iteration p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.review-dimension-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.review-dimension-list span {
+  padding: 3px 6px;
+  color: var(--muted);
+  background: var(--surface);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.review-issue-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink);
+  font-size: 12px;
+}
+.review-issue-list li {
+  display: grid;
+  gap: 2px;
+}
+.review-issue-list span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.review-decisions {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.review-decisions h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+}
+.review-decision-round {
+  display: grid;
+  gap: 5px;
+}
+.review-decision-round > strong {
+  color: var(--muted);
+  font-size: 11px;
+}
+.review-decision-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.review-decision-list li {
+  display: grid;
+  gap: 3px;
+  padding: 7px 8px;
+  background: var(--surface);
+  border-radius: 4px;
+}
+.review-decision-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.review-decision-heading span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.review-decision-list p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
 .generation-history-actions {
   display: flex;
   flex: 0 0 auto;
@@ -2514,6 +2632,65 @@ p {
   padding-top: 25px;
   margin-top: 24px;
   border-top: 1px solid #e9eae7;
+}
+.review-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+.review-config-grid > div {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border-radius: 6px;
+}
+.review-config-grid span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.review-config-grid strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+.settings-inline-warning {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--danger, #a33);
+  font-size: 12px;
+}
+.review-preferences-form {
+  margin-top: 16px;
+}
+.checkbox-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.checkbox-field input {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+.project-review-settings {
+  display: grid;
+  gap: 14px;
+}
+.project-review-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.project-review-controls .checkbox-field {
+  grid-column: 1 / -1;
+}
+@media (max-width: 720px) {
+  .project-review-controls {
+    grid-template-columns: 1fr;
+  }
 }
 .danger-panel .panel-title > div:nth-child(2) {
   flex: 1;

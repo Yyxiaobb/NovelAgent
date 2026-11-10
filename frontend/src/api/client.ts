@@ -22,6 +22,11 @@ import type {
   StoryMemoryConflict,
   StoryMemoryPayload,
   User,
+  GenerationReviewIteration,
+  RevisionDecision,
+  ReviewRuntimeConfig,
+  ReviewStats,
+  ReviewPreferenceUpdate,
 } from '../types'
 
 const TOKEN_KEY = 'novel-agent-token'
@@ -75,7 +80,7 @@ async function streamChapterContent(
   path: string,
   body: unknown,
   onChunk?: (chunk: string) => void,
-): Promise<{ content: string; meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_history?: Array<Record<string, unknown>> } }> {
+): Promise<{ content: string; meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: GenerationReviewIteration[]; revision_decisions?: RevisionDecision[] } }> {
   const token = localStorage.getItem(TOKEN_KEY)
   const headers = new Headers({ 'Content-Type': 'application/json' })
   if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -88,7 +93,7 @@ async function streamChapterContent(
   const decoder = new TextDecoder()
   let buffer = ''
   let content = ''
-  let meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_history?: Array<Record<string, unknown>> } | null = null
+  let meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: GenerationReviewIteration[]; revision_decisions?: RevisionDecision[] } | null = null
   const consume = (block: string) => {
     const line = block.split('\n').find(item => item.startsWith('data:'))
     if (!line) return
@@ -98,7 +103,7 @@ async function streamChapterContent(
       content += chunk
       onChunk?.(chunk)
     } else if (event.event === 'done') {
-      meta = event.data as { expected_words: number; plan: ChapterPlan }
+      meta = event.data as typeof meta
     } else if (event.event === 'error') {
       throw new ApiError(String(event.data))
     }
@@ -180,6 +185,22 @@ export const tokenStore = {
 }
 
 export const api = {
+  getReviewConfig: () => request<ReviewRuntimeConfig>('/api/agent/review/config'),
+  getReviewPreferences: () => request<ReviewRuntimeConfig>('/api/agent/review/preferences'),
+  updateReviewPreferences: (preferences: Pick<ReviewRuntimeConfig, 'enabled' | 'max_rounds' | 'accept_score' | 'manual_approval'>) =>
+    request<ReviewRuntimeConfig>('/api/agent/review/preferences', {
+      method: 'PUT',
+      body: JSON.stringify(preferences),
+    }),
+  getProjectReviewPreferences: (projectId: number) =>
+    request<Partial<ReviewRuntimeConfig>>(`/api/agent/projects/${projectId}/review/preferences`),
+  updateProjectReviewPreferences: (projectId: number, preferences: ReviewPreferenceUpdate) =>
+    request<Partial<ReviewRuntimeConfig>>(`/api/agent/projects/${projectId}/review/preferences`, {
+      method: 'PUT',
+      body: JSON.stringify(preferences),
+    }),
+  getReviewStats: (projectId?: number) =>
+    request<ReviewStats>(`/api/agent/review/stats${projectId ? `?project_id=${projectId}` : ''}`),
   login: (username: string, password: string) =>
     request<AuthData>('/api/user/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   register: (username: string, password: string) =>
@@ -362,7 +383,8 @@ export const api = {
       review_rounds?: number
       review_final_score?: number | null
       review_stop_reason?: string
-      review_history?: Array<Record<string, unknown>>
+      review_error?: string | null
+      review_history?: GenerationReviewIteration[]
     }>(`/api/agent/projects/${projectId}/outline/volumes/generate-plan`, {
       method: 'POST',
       body: JSON.stringify({
@@ -469,7 +491,8 @@ export const api = {
       review_rounds?: number
       review_final_score?: number | null
       review_stop_reason?: string
-      review_history?: Array<Record<string, unknown>>
+      review_history?: GenerationReviewIteration[]
+      revision_decisions?: RevisionDecision[]
     }>(`/api/agent/projects/${projectId}/chapters/${chapterId}/content`, {
       method: 'POST',
       body: JSON.stringify({ plan, user_idea: userIdea, knowledge_base_ids: knowledgeBaseIds }),
@@ -500,7 +523,9 @@ export const api = {
         review_rounds: result.meta.review_rounds,
         review_final_score: result.meta.review_final_score,
         review_stop_reason: result.meta.review_stop_reason,
+        review_error: result.meta.review_error,
         review_history: result.meta.review_history,
+        revision_decisions: result.meta.revision_decisions,
       }
     }
     const task = await request<{ job_id: string }>(
@@ -536,7 +561,9 @@ export const api = {
           review_rounds: status.generation_info?.review_rounds,
           review_final_score: status.generation_info?.review_final_score,
           review_stop_reason: status.generation_info?.review_stop_reason,
+          review_error: status.generation_info?.review_error,
           review_history: status.generation_info?.review_history,
+          revision_decisions: status.generation_info?.revision_decisions,
         }
       if (status.status === 'failed') throw new ApiError(status.error || '章节生成失败，请稍后重试')
       if (status.status === 'cancelled') throw new ApiError('生成任务已取消，可在生成历史中重新生成')
