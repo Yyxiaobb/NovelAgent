@@ -149,6 +149,8 @@ class AuthRouteTests(unittest.IsolatedAsyncioTestCase):
         stats = await self.client.get(f"/api/agent/review/stats?project_id={project_id}")
         self.assertEqual(stats.status_code, 200)
         self.assertEqual(stats.json()["data"]["total_jobs"], 0)
+        self.assertEqual(stats.json()["data"]["human_review_sessions"], 1)
+        self.assertEqual(stats.json()["data"]["human_review_session_statuses"]["applied"], 1)
 
         logged_out = await self.client.post("/api/user/logout")
         self.assertEqual(logged_out.status_code, 200)

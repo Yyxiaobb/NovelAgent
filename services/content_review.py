@@ -125,8 +125,8 @@ def review_runtime_config(preferences: dict[str, Any] | None = None) -> dict[str
     }
 
 
-def summarize_review_jobs(jobs: list[Any]) -> dict[str, Any]:
-    """Build bounded aggregate quality and runtime metrics from persisted jobs."""
+def summarize_review_jobs(jobs: list[Any], sessions: list[Any] | None = None) -> dict[str, Any]:
+    """Build bounded aggregate quality, runtime, and human-feedback metrics."""
     reviewed = [job for job in jobs if (job.result or {}).get("review_enabled")]
     scores = [
         int((job.result or {}).get("review_final_score"))
@@ -140,6 +140,7 @@ def summarize_review_jobs(jobs: list[Any]) -> dict[str, Any]:
     ]
     stop_reasons = Counter((job.result or {}).get("review_stop_reason") or "unknown" for job in reviewed)
     decisions = Counter()
+    human_decisions = Counter()
     durations = []
     for job in reviewed:
         for decision in (job.result or {}).get("revision_decisions", []):
@@ -147,6 +148,20 @@ def summarize_review_jobs(jobs: list[Any]) -> dict[str, Any]:
                 decisions[decision["decision"]] += 1
         if job.finished_at and job.created_at:
             durations.append(max(0.0, (job.finished_at - job.created_at).total_seconds()))
+    session_score_deltas: list[int] = []
+    sessions = sessions or []
+    session_statuses = Counter(getattr(session, "status", "unknown") for session in sessions)
+    for session in sessions:
+        for decision in (getattr(session, "manual_decisions", None) or []):
+            if decision.get("decision") in {"accepted", "partially_accepted", "rejected"}:
+                human_decisions[decision["decision"]] += 1
+        history = getattr(session, "review_history", None) or []
+        scores_for_session = [
+            item.get("score") for item in history
+            if isinstance(item, dict) and isinstance(item.get("score"), (int, float))
+        ]
+        if len(scores_for_session) >= 2:
+            session_score_deltas.append(int(scores_for_session[-1]) - int(scores_for_session[0]))
     return {
         "total_jobs": len(jobs),
         "reviewed_jobs": len(reviewed),
@@ -156,6 +171,17 @@ def summarize_review_jobs(jobs: list[Any]) -> dict[str, Any]:
         "average_duration_seconds": round(sum(durations) / len(durations), 1) if durations else None,
         "stop_reasons": dict(stop_reasons),
         "revision_decisions": dict(decisions),
+        "human_review_sessions": len(sessions),
+        "human_review_session_statuses": dict(session_statuses),
+        "human_revision_decisions": dict(human_decisions),
+        "average_revision_score_delta": (
+            round(sum(session_score_deltas) / len(session_score_deltas), 1) if session_score_deltas else None
+        ),
+        "revision_score_improvement_rate": (
+            round(sum(delta > 0 for delta in session_score_deltas) / len(session_score_deltas), 3)
+            if session_score_deltas else None
+        ),
+        "revision_score_samples": len(session_score_deltas),
         "sample_limit": 5000,
         "generated_at": datetime.now().isoformat(),
     }

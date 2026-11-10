@@ -288,6 +288,12 @@ export interface ReviewStats {
   average_duration_seconds: number | null
   stop_reasons: Record<string, number>
   revision_decisions: Record<string, number>
+  human_review_sessions: number
+  human_review_session_statuses: Record<string, number>
+  human_revision_decisions: Record<string, number>
+  average_revision_score_delta: number | null
+  revision_score_improvement_rate: number | null
+  revision_score_samples: number
   sample_limit: number
   generated_at: string
 }

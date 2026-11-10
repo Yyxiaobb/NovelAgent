@@ -213,7 +213,8 @@ async def get_review_stats(
     if project_id is not None and await projects.get_project(db, project_id, user.id) is None:
         raise HTTPException(status_code=404, detail="作品不存在或无权访问")
     jobs = await generation_crud.list_review_jobs(db, user.id, project_id=project_id)
-    return success_response(message="获取评审统计成功", data=summarize_review_jobs(jobs))
+    sessions = await review_sessions_crud.list_review_sessions(db, user.id, project_id=project_id)
+    return success_response(message="获取评审统计成功", data=summarize_review_jobs(jobs, sessions))
 
 
 @router.get("/review-sessions/{session_id}")

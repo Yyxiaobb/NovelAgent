@@ -122,12 +122,31 @@ class ContentReviewTests(unittest.IsolatedAsyncioTestCase):
             ),
             SimpleNamespace(result={"review_enabled": False}, created_at=now, finished_at=None),
         ]
-        summary = summarize_review_jobs(jobs)
+        sessions = [
+            SimpleNamespace(
+                status="applied",
+                manual_decisions=[{"decision": "accepted"}, {"decision": "rejected"}],
+                review_history=[{"score": 70}, {"score": 82}],
+            ),
+            SimpleNamespace(
+                status="awaiting_review",
+                manual_decisions=[{"decision": "partially_accepted"}],
+                review_history=[{"score": 80}, {"score": 75}],
+            ),
+            SimpleNamespace(status="completed", manual_decisions=[], review_history=[{"score": 91}]),
+        ]
+        summary = summarize_review_jobs(jobs, sessions)
         self.assertEqual(summary["total_jobs"], 3)
         self.assertEqual(summary["reviewed_jobs"], 2)
         self.assertEqual(summary["average_score"], 80)
         self.assertEqual(summary["review_unavailable_jobs"], 1)
         self.assertEqual(summary["revision_decisions"]["accepted"], 1)
+        self.assertEqual(summary["human_review_sessions"], 3)
+        self.assertEqual(summary["human_review_session_statuses"]["applied"], 1)
+        self.assertEqual(summary["human_revision_decisions"]["partially_accepted"], 1)
+        self.assertEqual(summary["average_revision_score_delta"], 3.5)
+        self.assertEqual(summary["revision_score_improvement_rate"], 0.5)
+        self.assertEqual(summary["revision_score_samples"], 2)
 
     def test_revision_output_records_acceptance_decisions_and_supports_plain_text_fallback(self):
         structured = json.dumps({

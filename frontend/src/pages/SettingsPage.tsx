@@ -229,7 +229,7 @@ export function SettingsPage() {
           <span className="panel-title-icon neutral"><ShieldCheck size={19} /></span>
           <div>
             <h2>评审质量统计</h2>
-            <p>基于最近最多 5000 条正文生成任务；评分和耗时只统计已完成评审的任务。</p>
+            <p>基于最近最多 5000 条正文生成任务和人工评审会话；评分提升率仅统计至少完成一轮修订的会话。</p>
           </div>
         </div>
         {reviewStats && (
@@ -240,11 +240,18 @@ export function SettingsPage() {
             <div><span>平均评审轮数</span><strong>{reviewStats.average_rounds ?? '暂无'}{reviewStats.average_rounds === null ? '' : ' 轮'}</strong></div>
             <div><span>平均任务耗时</span><strong>{reviewStats.average_duration_seconds ?? '暂无'}{reviewStats.average_duration_seconds === null ? '' : ' 秒'}</strong></div>
             <div><span>评论员不可用</span><strong>{reviewStats.review_unavailable_jobs}</strong></div>
+            <div><span>人工评审会话</span><strong>{reviewStats.human_review_sessions}</strong></div>
+            <div><span>人工修订评分变化</span><strong>{reviewStats.average_revision_score_delta ?? '暂无'}{reviewStats.average_revision_score_delta === null ? '' : ' 分'}</strong></div>
+            <div><span>修订后评分提升率</span><strong>{reviewStats.revision_score_improvement_rate === null ? '暂无' : `${Math.round(reviewStats.revision_score_improvement_rate * 100)}%`}</strong></div>
             <div>
               <span>修订决策</span>
               <strong>
                 采纳 {reviewStats.revision_decisions.accepted ?? 0} · 部分采纳 {reviewStats.revision_decisions.partially_accepted ?? 0} · 拒绝 {reviewStats.revision_decisions.rejected ?? 0}
               </strong>
+            </div>
+            <div>
+              <span>人工建议选择</span>
+              <strong>采纳 {reviewStats.human_revision_decisions.accepted ?? 0} · 部分采纳 {reviewStats.human_revision_decisions.partially_accepted ?? 0} · 拒绝 {reviewStats.human_revision_decisions.rejected ?? 0}</strong>
             </div>
           </div>
         )}

@@ -13,6 +13,22 @@ async def get_session(db: AsyncSession, session_id: str, user_id: int) -> Review
     )
 
 
+async def list_review_sessions(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    project_id: int | None = None,
+    limit: int = 5000,
+) -> list[ReviewSession]:
+    query = select(ReviewSession).where(ReviewSession.user_id == user_id)
+    if project_id is not None:
+        query = query.where(ReviewSession.project_id == project_id)
+    result = await db.scalars(
+        query.order_by(ReviewSession.created_at.desc()).limit(max(1, min(limit, 5000)))
+    )
+    return list(result.all())
+
+
 async def create_session(
     db: AsyncSession,
     *,
