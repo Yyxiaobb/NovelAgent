@@ -84,6 +84,68 @@ class AuthRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolved, {
             "enabled": True, "max_rounds": 2, "accept_score": 90, "manual_approval": True,
         })
+        created_chapter = await self.client.post(
+            f"/api/project/{project_id}/chapters",
+            json={"chapter_number": 1, "chaptername": "测试章", "content": "初稿正文"},
+        )
+        chapter_id = created_chapter.json()["data"]["id"]
+        from crud.review_sessions import create_session
+        review_payload = {
+            "overall_score": 70,
+            "summary": "需要继续打磨",
+            "strengths": [],
+            "issues": [{
+                "id": "issue-1", "category": "style", "severity": "major",
+                "evidence": "节奏较快", "suggestion": "补充过渡", "must_fix": False,
+            }],
+            "dimension_scores": {key: 70 for key in (
+                "goal", "continuity", "character", "causality", "style", "pacing", "ending",
+            )},
+            "stop_recommendation": False,
+        }
+        async with self.sessions() as session:
+            review_session = await create_session(
+                session,
+                user_id=user_id,
+                project_id=project_id,
+                chapter_id=chapter_id,
+                initial_content="初稿正文",
+                draft_content="初稿正文",
+                generation_payload={"expected_words": 3000},
+                review_history=[{"round": 1, "score": 70, "review": review_payload}],
+                latest_review=review_payload,
+                max_rounds=3,
+                accept_score=85,
+            )
+            review_session_id = review_session.id
+        review_session_response = await self.client.get(f"/api/agent/review-sessions/{review_session_id}")
+        self.assertEqual(review_session_response.status_code, 200)
+        self.assertEqual(review_session_response.json()["data"]["status"], "awaiting_review")
+        applied = await self.client.post(
+            f"/api/agent/review-sessions/{review_session_id}/apply",
+            json={"content": "人工确认后的正文"},
+        )
+        self.assertEqual(applied.status_code, 200)
+        self.assertEqual(applied.json()["data"]["status"], "applied")
+        from crud.review_sessions import get_session as get_review_session, save_session
+        async with self.sessions() as session:
+            persisted = await get_review_session(session, review_session_id, user_id)
+            await save_session(
+                session,
+                persisted,
+                last_continue_request_id="retry-key-123456",
+                last_continue_response={
+                    **applied.json()["data"],
+                    "status": "completed",
+                    "stop_reason": "threshold_reached",
+                },
+            )
+        replayed = await self.client.post(
+            f"/api/agent/review-sessions/{review_session_id}/continue",
+            json={"request_id": "retry-key-123456", "decisions": []},
+        )
+        self.assertEqual(replayed.status_code, 200)
+        self.assertEqual(replayed.json()["data"]["status"], "completed")
         stats = await self.client.get(f"/api/agent/review/stats?project_id={project_id}")
         self.assertEqual(stats.status_code, 200)
         self.assertEqual(stats.json()["data"]["total_jobs"], 0)

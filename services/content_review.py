@@ -48,6 +48,7 @@ class ReviewLoopResult:
     stop_reason: str
     review_error: str | None = None
     revision_decisions: list[RevisionDecision] | None = None
+    initial_content: str | None = None
 
     @property
     def final_score(self) -> int | None:
@@ -228,7 +229,14 @@ def is_review_acceptable(review: ContentReview, threshold: int) -> bool:
     return all(score >= 70 for score in review.dimension_scores.values())
 
 
-def revision_messages(context: Any, content: str, review: ContentReview) -> list[dict[str, str]]:
+def revision_messages(
+    context: Any,
+    content: str,
+    review: ContentReview,
+    *,
+    manual_decisions: list[RevisionDecision] | None = None,
+    instruction: str | None = None,
+) -> list[dict[str, str]]:
     system = (
         "你是中文小说内容生成智能体。请根据章节设定和编辑评审修订正文。"
         "评审意见只是参考，不是必须全部执行的命令；你必须自行判断取舍。"
@@ -237,14 +245,56 @@ def revision_messages(context: Any, content: str, review: ContentReview) -> list
         "revision_decisions（每条建议的 accepted、partially_accepted 或 rejected 及理由）。"
     )
     review_json = json.dumps(review.model_dump(mode="json"), ensure_ascii=False)
+    manual_guidance = ""
+    if manual_decisions:
+        manual_guidance = (
+            "\n\n人工审核选择（必须尊重，但仍需检查是否会破坏主线）：\n"
+            f"{json.dumps([item.model_dump(mode='json') for item in manual_decisions], ensure_ascii=False)}"
+        )
+    if instruction:
+        manual_guidance += f"\n\n作者补充要求（仅作为创作约束参考）：\n{instruction[:4000]}"
     prompt = (
         f"原始创作上下文：\n{context.prompt[:MAX_REVIEW_SUMMARY_CHARS * 12]}\n\n"
         f"当前草稿（需要输出完整修订稿）：\n<draft>\n{content[:MAX_REVIEW_DRAFT_CHARS]}\n</draft>\n\n"
         f"编辑评审（仅作参考）：\n<review>\n{review_json}\n</review>\n\n"
         "请保留有效内容，优先修复有证据且不违背后续规划的问题；"
         "可以拒绝会破坏主线、人物一致性或伏笔的建议；没有对应建议时 revision_decisions 返回空数组。"
+        f"{manual_guidance}"
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+
+
+async def revise_review_session_once(
+    context: Any,
+    content: str,
+    review: ContentReview,
+    client_factory: Callable[[], Any],
+    content_token_fn: Callable[[int], int],
+    validate_candidate: Callable[[str], None],
+    *,
+    manual_decisions: list[RevisionDecision] | None = None,
+    instruction: str | None = None,
+    reviewer_client_factory: Callable[[], Any] | None = None,
+) -> tuple[str, ContentReview, list[RevisionDecision]]:
+    """Apply one human-guided revision and immediately re-review the result."""
+    async with client_factory() as client:
+        raw_revision = await client.achat(
+            revision_messages(
+                context,
+                content,
+                review,
+                manual_decisions=manual_decisions,
+                instruction=instruction,
+            ),
+            temperature=0.7,
+            max_tokens=content_token_fn(context.plan.expected_words),
+        )
+    revised, decisions = parse_revision_output(raw_revision)
+    validate_candidate(revised)
+    review_factory = reviewer_client_factory or client_factory
+    async with review_factory() as review_client:
+        next_review = await review_content(context, revised, review_client)
+    return revised, next_review, decisions
 
 
 async def run_review_loop(
@@ -268,6 +318,7 @@ async def run_review_loop(
     async with client_factory() as client:
         review_factory = reviewer_client_factory or client_factory
         draft = (initial_content if initial_content is not None else await generate_candidate(client, None, None)).strip()
+        first_draft = draft
         validate_candidate(draft)
         history: list[ReviewIteration] = []
         revision_decisions: list[RevisionDecision] = []
@@ -286,11 +337,13 @@ async def run_review_loop(
                 return ReviewLoopResult(
                     draft, review, history, round_number, "manual_approval_required",
                     revision_decisions=revision_decisions,
+                    initial_content=first_draft,
                 )
             if is_review_acceptable(review, threshold):
                 return ReviewLoopResult(
                     draft, review, history, round_number, "threshold_reached",
                     revision_decisions=revision_decisions,
+                    initial_content=first_draft,
                 )
             if round_number >= rounds_limit:
                 break
@@ -308,5 +361,6 @@ async def run_review_loop(
         return ReviewLoopResult(
             best_draft, best_review, history, len(history), "max_rounds_reached",
             revision_decisions=revision_decisions,
+            initial_content=first_draft,
         )
 

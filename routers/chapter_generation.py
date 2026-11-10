@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Any
 
 from time import perf_counter
 
@@ -26,6 +27,7 @@ from crud import generation as generation_crud
 
 from crud import story_memory as story_memory_crud
 from crud import review_preferences as review_preferences_crud
+from crud import review_sessions as review_sessions_crud
 
 from models.users import User
 from models.projects import Chapter
@@ -41,6 +43,11 @@ from schemas.agent import (
     RollingChapterPlanGenerationResponse,
     RollingChapterPlanItem,
     ReviewPreferencePayload,
+    ContentReview,
+    ReviewSessionApplyRequest,
+    ReviewSessionContinueRequest,
+    ReviewSessionInfo,
+    RevisionDecision,
 )
 
 from schemas.projects import ChapterPlan
@@ -77,7 +84,13 @@ from services.chapter_generation import (
     validate_content_quality,
 )
 from services.chapter_memory_generation import generate_chapter_memory as generate_chapter_memory_for_chapter
-from services.content_review import review_runtime_config, summarize_review_jobs
+from services.content_review import (
+    is_review_acceptable,
+    revise_review_session_once,
+    review_runtime_config,
+    review_settings,
+    summarize_review_jobs,
+)
 
 from services.story_memory import build_project_memory_context
 
@@ -86,15 +99,63 @@ from agent.prompts import render_prompt
 from agent.runtime import run_agent
 
 from agent.skills import load_skill
-from services.generation_runtime import generation_client
+from services.generation_runtime import generation_client, reviewer_client
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+GENERATION_INFO_KEYS = (
+    "model", "prompt_template_id", "prompt_template_version", "segments", "quality_check",
+    "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_error",
+    "review_history", "revision_decisions", "review_session_id",
+)
+
+
+def _generation_info(result: dict | None) -> dict:
+    result = result or {}
+    return {key: result.get(key) for key in GENERATION_INFO_KEYS if result.get(key) is not None}
 
 
 @router.get("/review/config")
 async def get_review_config(user: User = Depends(get_current_user)):
     """Expose safe review settings without returning credentials or service URLs."""
     return success_response(message="获取评审配置成功", data=review_runtime_config())
+
+
+def _review_session_info(session: Any) -> ReviewSessionInfo:
+    values = review_sessions_crud.session_values(session)
+    if values.get("latest_review"):
+        values["latest_review"] = ContentReview.model_validate(values["latest_review"])
+    return ReviewSessionInfo.model_validate(values)
+
+
+async def _persist_manual_review_session(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    context: Any,
+    payload: ChapterGenerationRequest,
+    content: str,
+    review_result: Any,
+    generation_job_id: str | None = None,
+) -> str | None:
+    if not review_result or review_result.stop_reason != "manual_approval_required" or not review_result.review:
+        return None
+    max_rounds, accept_score = review_settings(payload.review_preferences)
+    session = await review_sessions_crud.create_session(
+        db,
+        user_id=user_id,
+        project_id=context.project.id,
+        chapter_id=context.chapter.id,
+        initial_content=review_result.initial_content or content,
+        draft_content=content,
+        generation_payload=payload.model_dump(mode="json"),
+        review_history=[item.as_dict() for item in review_result.history],
+        latest_review=review_result.review.model_dump(mode="json"),
+        max_rounds=max_rounds,
+        accept_score=accept_score,
+        generation_job_id=generation_job_id,
+    )
+    return session.id
 
 
 @router.get("/review/preferences")
@@ -153,6 +214,139 @@ async def get_review_stats(
         raise HTTPException(status_code=404, detail="作品不存在或无权访问")
     jobs = await generation_crud.list_review_jobs(db, user.id, project_id=project_id)
     return success_response(message="获取评审统计成功", data=summarize_review_jobs(jobs))
+
+
+@router.get("/review-sessions/{session_id}")
+async def get_review_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    session = await review_sessions_crud.get_session(db, session_id, user.id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="评审会话不存在或无权访问")
+    return success_response(message="获取评审会话成功", data=_review_session_info(session))
+
+
+@router.post("/review-sessions/{session_id}/continue")
+async def continue_review_session(
+    session_id: str,
+    payload: ReviewSessionContinueRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    session = await review_sessions_crud.get_session(db, session_id, user.id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="评审会话不存在或无权访问")
+    if session.last_continue_request_id == payload.request_id and session.last_continue_response:
+        return success_response(message="评审修订已完成", data=session.last_continue_response)
+    if session.status != "awaiting_review":
+        raise HTTPException(status_code=409, detail="评审会话已经结束，不能继续修订")
+    if not session.latest_review:
+        raise HTTPException(status_code=409, detail="评审会话缺少当前评审结果")
+    review = ContentReview.model_validate(session.latest_review)
+    issue_ids = {issue.id for issue in review.issues}
+    decision_ids = [item.issue_id for item in payload.decisions]
+    if len(decision_ids) != len(set(decision_ids)):
+        raise HTTPException(status_code=422, detail="同一评审问题只能选择一次")
+    unknown_issue_ids = [item.issue_id for item in payload.decisions if item.issue_id not in issue_ids]
+    if unknown_issue_ids:
+        raise HTTPException(status_code=422, detail=f"评审问题不存在：{', '.join(unknown_issue_ids)}")
+    manual_decisions = [
+        RevisionDecision(
+            round=session.current_round,
+            issue_id=item.issue_id,
+            decision=item.decision,
+            reason=item.reason,
+        )
+        for item in payload.decisions
+    ]
+    request_payload = ChapterGenerationRequest.model_validate(session.generation_payload or {})
+    request_payload.review_preferences = {
+        **(request_payload.review_preferences.model_dump(exclude_none=True) if request_payload.review_preferences else {}),
+        "manual_approval": False,
+        "max_rounds": session.max_rounds,
+        "accept_score": session.accept_score,
+        "enabled": True,
+    }
+    context = await prepare_content_context(db, session.project_id, session.chapter_id, user.id, request_payload)
+    try:
+        revised, next_review, agent_decisions = await revise_review_session_once(
+            context,
+            session.draft_content,
+            review,
+            generation_client,
+            _content_max_tokens,
+            lambda value: validate_content_quality(value, context.plan.expected_words),
+            manual_decisions=manual_decisions,
+            instruction=payload.instruction,
+            reviewer_client_factory=reviewer_client,
+        )
+    except ContentQualityError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    except LLMConfigurationError as error:
+        raise HTTPException(status_code=503, detail="智能生成尚未配置模型，请先配置 MODEL、API_KEY 和 BASE_URL") from error
+    except LLMError as error:
+        raise HTTPException(status_code=502, detail="评审修订暂时不可用，请稍后重试") from error
+
+    next_round = session.current_round + 1
+    next_iteration = {
+        "round": next_round,
+        "score": next_review.overall_score,
+        "review": next_review.model_dump(mode="json"),
+    }
+    history = [*(session.review_history or []), next_iteration]
+    revision_decisions = [*(session.revision_decisions or [])]
+    revision_decisions.extend(
+        item.model_copy(update={"round": next_round}).model_dump(mode="json") for item in agent_decisions
+    )
+    manual_history = [*(session.manual_decisions or [])]
+    manual_history.extend(item.model_dump(mode="json") for item in manual_decisions)
+    accepted = is_review_acceptable(next_review, session.accept_score)
+    reached_limit = next_round >= session.max_rounds
+    next_status = "completed" if accepted or reached_limit else "awaiting_review"
+    stop_reason = "threshold_reached" if accepted else "max_rounds_reached" if reached_limit else "manual_approval_required"
+    await review_sessions_crud.save_session(
+        db,
+        session,
+        current_round=next_round,
+        draft_content=revised,
+        latest_review=next_review.model_dump(mode="json"),
+        review_history=history,
+        revision_decisions=revision_decisions,
+        manual_decisions=manual_history,
+        status=next_status,
+        stop_reason=stop_reason,
+        completed_at=datetime.now() if next_status == "completed" else None,
+        last_error=None,
+        last_continue_request_id=payload.request_id,
+        last_continue_response=None,
+    )
+    return success_response(message="评审修订已完成", data=_review_session_info(session))
+
+
+@router.post("/review-sessions/{session_id}/apply")
+async def apply_review_session(
+    session_id: str,
+    payload: ReviewSessionApplyRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    session = await review_sessions_crud.get_session(db, session_id, user.id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="评审会话不存在或无权访问")
+    if session.status not in {"awaiting_review", "completed"}:
+        raise HTTPException(status_code=409, detail="当前评审会话不能应用")
+    await review_sessions_crud.save_session(
+        db,
+        session,
+        draft_content=payload.content,
+        status="applied",
+        stop_reason="manual_applied",
+        completed_at=datetime.now(),
+        last_error=None,
+    )
+    return success_response(message="评审稿已确认应用", data=_review_session_info(session))
 
 
 def _chapter_plan_prior_context(chapters: list, *, detailed_count: int = 3) -> str:
@@ -232,6 +426,14 @@ async def generate_chapter_content(
 
     if not content:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="模型未返回可用章节内容")
+    review_session_id = await _persist_manual_review_session(
+        db,
+        user_id=user.id,
+        context=context,
+        payload=payload,
+        content=content,
+        review_result=review_result,
+    )
     return success_response(
         message="章节生成成功",
         data=ChapterGenerationResponse(
@@ -241,6 +443,7 @@ async def generate_chapter_content(
             plan=plan,
             content=content,
             citations=citations,
+            review_session_id=review_session_id,
             **(review_result.metadata() if review_result else {}),
         ),
     )
@@ -289,6 +492,14 @@ async def stream_chapter_content(
                 generated_parts.append(reviewed_content)
                 total = len(reviewed_content)
                 yield sse("chunk", reviewed_content)
+                review_session_id = await _persist_manual_review_session(
+                    db,
+                    user_id=user.id,
+                    context=context,
+                    payload=payload,
+                    content=reviewed_content,
+                    review_result=review_result,
+                )
                 review_metadata = review_result.metadata() if review_result else {}
                 yield sse(
                     "done",
@@ -298,6 +509,7 @@ async def stream_chapter_content(
                         "expected_words": plan.expected_words,
                         "plan": plan.model_dump(),
                         "citations": citations,
+                        "review_session_id": review_session_id,
                         **review_metadata,
                     },
                 )
@@ -395,14 +607,7 @@ async def get_chapter_content_job(job_id: str, user: User = Depends(get_current_
             "expected_words": result.get("expected_words"),
             "plan": result.get("plan"),
             "citations": result.get("citations", []),
-            "generation_info": {
-                key: result.get(key)
-                for key in (
-                    "model", "prompt_template_id", "prompt_template_version", "segments", "quality_check",
-                    "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_error", "review_history", "revision_decisions",
-                )
-                if result.get(key) is not None
-            },
+            "generation_info": _generation_info(result),
             "error": job.error_message,
         },
     )
@@ -437,14 +642,7 @@ async def list_chapter_content_jobs(
                 "expected_words": (job.result or {}).get("expected_words"),
                 "plan": (job.result or {}).get("plan"),
                 "citations": (job.result or {}).get("citations", []),
-                "generation_info": {
-                    key: (job.result or {}).get(key)
-                    for key in (
-                        "model", "prompt_template_id", "prompt_template_version", "segments", "quality_check",
-                        "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_error", "review_history", "revision_decisions",
-                    )
-                    if (job.result or {}).get(key) is not None
-                },
+                "generation_info": _generation_info(job.result),
                 "error": job.error_message,
                 "created_at": job.created_at.isoformat(),
                 "updated_at": job.updated_at.isoformat(),

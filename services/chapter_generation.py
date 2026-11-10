@@ -14,6 +14,7 @@ from agent.prompts import get_prompt_template, render_prompt
 from crud import generation as generation_crud
 from crud import projects
 from crud import story_memory as story_memory_crud
+from crud import review_sessions as review_sessions_crud
 from models.generation import GenerationJob
 from schemas.agent import ChapterGenerationRequest
 from schemas.projects import ChapterPlan
@@ -30,6 +31,7 @@ from services.content_review import (
     review_enabled,
     run_review_loop,
     parse_revision_output,
+    review_settings,
 )
 from services.generation_runtime import reviewer_client
 
@@ -472,6 +474,23 @@ async def run_content_job(
                 job.progress = 95
                 await db.commit()
                 review_metadata = review_result.metadata() if review_result else {"review_enabled": False}
+                if review_result and review_result.stop_reason == "manual_approval_required" and review_result.review:
+                    max_rounds, accept_score = review_settings(payload.review_preferences)
+                    review_session = await review_sessions_crud.create_session(
+                        db,
+                        user_id=job.user_id,
+                        project_id=job.project_id,
+                        chapter_id=job.chapter_id,
+                        initial_content=review_result.initial_content or reviewed_content,
+                        draft_content=reviewed_content,
+                        generation_payload=payload.model_dump(mode="json"),
+                        review_history=[item.as_dict() for item in review_result.history],
+                        latest_review=review_result.review.model_dump(mode="json"),
+                        max_rounds=max_rounds,
+                        accept_score=accept_score,
+                        generation_job_id=job_id,
+                    )
+                    review_metadata["review_session_id"] = review_session.id
                 await generation_crud.complete_job_if_active(
                     db, job_id, output_content=reviewed_content,
                     result={

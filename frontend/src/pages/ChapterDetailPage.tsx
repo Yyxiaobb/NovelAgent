@@ -10,7 +10,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import type {
@@ -21,6 +21,8 @@ import type {
   GenerationJob,
   GenerationReviewIteration,
   KnowledgeCitation,
+  ReviewDecisionSelection,
+  ReviewSessionInfo,
 } from '../types'
 import { KnowledgeBaseSelector } from '../components/KnowledgeBaseSelector'
 import { KnowledgeCitationList } from '../components/KnowledgeCitationList'
@@ -105,6 +107,34 @@ function ReviewIterationCard({ iteration, heading }: { iteration: GenerationRevi
   )
 }
 
+function ReviewDraftDiff({ before, after }: { before: string; after: string }) {
+  let prefixLength = 0
+  while (prefixLength < before.length && prefixLength < after.length && before[prefixLength] === after[prefixLength]) {
+    prefixLength += 1
+  }
+  if (prefixLength > 0 && /[\uD800-\uDBFF]/.test(before[prefixLength - 1] || '')) prefixLength -= 1
+  let suffixLength = 0
+  while (
+    suffixLength < before.length - prefixLength &&
+    suffixLength < after.length - prefixLength &&
+    before[before.length - suffixLength - 1] === after[after.length - suffixLength - 1]
+  ) {
+    suffixLength += 1
+  }
+  if (suffixLength > 0 && /[\uDC00-\uDFFF]/.test(before[before.length - suffixLength] || '')) suffixLength -= 1
+  const prefix = before.slice(0, prefixLength)
+  const removed = before.slice(prefixLength, before.length - suffixLength)
+  const added = after.slice(prefixLength, after.length - suffixLength)
+  const suffix = suffixLength ? before.slice(before.length - suffixLength) : ''
+  return (
+    <details className="review-draft-diff">
+      <summary>查看正文修订 Diff</summary>
+      <pre>{prefix}<del>{removed || '（无删除内容）'}</del>{suffix}</pre>
+      <pre>{prefix}<ins>{added || '（无新增内容）'}</ins>{suffix}</pre>
+    </details>
+  )
+}
+
 export function ChapterDetailPage() {
   const { projectId, chapterId, feature } = useParams()
   const location = useLocation()
@@ -137,6 +167,12 @@ export function ChapterDetailPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [generationReview, setGenerationReview] = useState<GenerationReviewIteration[]>([])
+  const [reviewSessionId, setReviewSessionId] = useState<string | null>(null)
+  const [reviewSession, setReviewSession] = useState<ReviewSessionInfo | null>(null)
+  const [reviewChoices, setReviewChoices] = useState<Record<string, ReviewDecisionSelection['decision']>>({})
+  const [reviewInstruction, setReviewInstruction] = useState('')
+  const [reviewActionBusy, setReviewActionBusy] = useState(false)
+  const reviewRequestId = useRef<string | null>(null)
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([])
   const [expandedReviewJobs, setExpandedReviewJobs] = useState<Set<string>>(new Set())
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -523,6 +559,11 @@ export function ChapterDetailPage() {
     setGenerationProgress(0)
     setGenerationError('')
     setGenerationReview([])
+    setReviewSessionId(null)
+    setReviewSession(null)
+    setReviewChoices({})
+    setReviewInstruction('')
+    reviewRequestId.current = null
     setDraft(current => ({ ...current, content: '' }))
     try {
       const plan = parseChapterPlan(planTextDraft, words, planDraft)
@@ -546,6 +587,14 @@ export function ChapterDetailPage() {
       setDraft(current => ({ ...current, content: result.content }))
       setKnowledgeCitations(result.citations || [])
       setGenerationReview(result.review_history || [])
+      setReviewSessionId(result.review_session_id || null)
+      if (result.review_session_id) {
+        try {
+          setReviewSession(await api.getReviewSession(result.review_session_id))
+        } catch {
+          setReviewSession(null)
+        }
+      }
       setGenerationDialogOpen(false)
       setNotice(
         result.review_enabled
@@ -561,6 +610,56 @@ export function ChapterDetailPage() {
       setGenerationProgress(100)
     }
   }
+
+  async function continueManualReview() {
+    if (!reviewSessionId) return
+    setReviewActionBusy(true)
+    try {
+      const requestId = reviewRequestId.current || crypto.randomUUID()
+      reviewRequestId.current = requestId
+      const decisions: ReviewDecisionSelection[] = Object.entries(reviewChoices).map(([issue_id, decision]) => ({
+        issue_id,
+        decision,
+        reason: '作者已确认按此选择处理',
+      }))
+      const updated = await api.continueReviewSession(reviewSessionId, {
+        request_id: requestId,
+        decisions,
+        instruction: reviewInstruction.trim() || undefined,
+      })
+      setReviewSession(updated)
+      reviewRequestId.current = null
+      setDraft(current => ({ ...current, content: updated.draft_content }))
+      setGenerationReview(updated.review_history)
+      setReviewChoices({})
+      setReviewInstruction('')
+      setNotice(
+        updated.status === 'completed'
+          ? `人工确认后的修订已完成，当前评分 ${updated.latest_review?.overall_score ?? '未评分'} 分。请检查后保存章节。`
+          : `已完成第 ${updated.current_round} 轮人工确认修订，当前评分 ${updated.latest_review?.overall_score ?? '未评分'} 分。`,
+      )
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '人工确认修订失败，请稍后重试')
+    } finally {
+      setReviewActionBusy(false)
+    }
+  }
+
+  async function applyManualReview() {
+    if (!reviewSessionId || !draft.content.trim()) return
+    setReviewActionBusy(true)
+    try {
+      const updated = await api.applyReviewSession(reviewSessionId, draft.content)
+      setReviewSession(updated)
+      setNotice('当前评审稿已确认应用，请点击“保存修改”写入章节')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '确认评审稿失败，请稍后重试')
+    } finally {
+      setReviewActionBusy(false)
+    }
+  }
+
+  const latestReview = reviewSession?.latest_review || generationReview[generationReview.length - 1]?.review || null
 
   if (loading)
     return (
@@ -933,6 +1032,75 @@ export function ChapterDetailPage() {
                   heading={`第 ${iteration.round} 轮评审`}
                 />
               ))}
+              {reviewSessionId && latestReview && reviewSession?.status !== 'applied' && (
+                <div className="review-action-panel">
+                  <div className="review-action-heading">
+                    <div>
+                      <h3>人工确认后继续修订</h3>
+                      <p>逐条选择处理方式，内容智能体会结合后续规划自行判断是否执行。</p>
+                    </div>
+                    <span className="review-session-status">{reviewSession?.status === 'completed' ? '当前轮次已完成' : '等待确认'}</span>
+                  </div>
+                  {reviewSession && reviewSession.initial_content !== reviewSession.draft_content && (
+                    <ReviewDraftDiff before={reviewSession.initial_content} after={reviewSession.draft_content} />
+                  )}
+                  {latestReview.issues.length > 0 ? (
+                    <div className="review-choice-list">
+                      {latestReview.issues.map(issue => (
+                        <label className="review-choice-row" key={issue.id}>
+                          <span>
+                            <strong>{issue.must_fix ? '必须修复 · ' : ''}{issue.suggestion}</strong>
+                            <small>{issue.evidence}</small>
+                          </span>
+                          <select
+                            aria-label={`处理评审问题 ${issue.id}`}
+                            value={reviewChoices[issue.id] || ''}
+                            onChange={event => {
+                              const value = event.target.value as ReviewDecisionSelection['decision'] | ''
+                              setReviewChoices(current => {
+                                const next = { ...current }
+                                if (value) next[issue.id] = value
+                                else delete next[issue.id]
+                                return next
+                              })
+                            }}
+                          >
+                            <option value="">暂不指定</option>
+                            <option value="accepted">采纳</option>
+                            <option value="partially_accepted">部分采纳</option>
+                            <option value="rejected">拒绝</option>
+                          </select>
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="chapter-placeholder">本轮没有具体问题，可以直接让内容智能体继续检查。</p>
+                  )}
+                  <label className="field review-instruction-field">
+                    <span>作者补充说明（可选）</span>
+                    <textarea
+                      value={reviewInstruction}
+                      onChange={event => setReviewInstruction(event.target.value)}
+                      rows={3}
+                      maxLength={4000}
+                      placeholder="例如：保留结尾悬念，不改变主角已经确定的动机。"
+                    />
+                  </label>
+                  <div className="section-heading-actions">
+                    <button className="secondary-button" type="button" onClick={() => void applyManualReview()} disabled={reviewActionBusy}>
+                      确认当前稿
+                    </button>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      onClick={() => void continueManualReview()}
+                      disabled={reviewActionBusy || reviewSession?.status === 'completed'}
+                    >
+                      {reviewActionBusy ? '正在修订…' : reviewSession?.status === 'completed' ? '评审轮次已完成' : '按选择继续修订'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </section>
           )}
           {draftProtection.recovery && (

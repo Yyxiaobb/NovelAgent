@@ -7,8 +7,9 @@ from .inspiration import Inspiration
 from .outline_volume import OutlineVolume
 from .outline_volume_versions import OutlineVolumeVersion
 from .review_preferences import ReviewPreferences
+from .review_sessions import ReviewSession
 
 __all__ = [
     "GenerationJob", "ChapterVersion", "OutlineVersion", "StoryMemory", "StoryMemoryEvent",
-    "KnowledgeBase", "KnowledgeDocument", "KnowledgeChunk", "Inspiration", "OutlineVolume", "OutlineVolumeVersion", "ReviewPreferences",
+    "KnowledgeBase", "KnowledgeDocument", "KnowledgeChunk", "Inspiration", "OutlineVolume", "OutlineVolumeVersion", "ReviewPreferences", "ReviewSession",
 ]

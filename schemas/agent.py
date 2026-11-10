@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -125,6 +126,7 @@ class ChapterGenerationResponse(BaseModel):
     review_error: Optional[str] = None
     review_history: list[dict] = Field(default_factory=list)
     revision_decisions: list[dict] = Field(default_factory=list)
+    review_session_id: Optional[str] = None
 
 
 ReviewIssueCategory = Literal[
@@ -174,6 +176,43 @@ class RevisionDecision(BaseModel):
 class RevisionOutput(BaseModel):
     content: str = Field(..., min_length=1, max_length=100000)
     revision_decisions: list[RevisionDecision] = Field(default_factory=list, max_length=20)
+
+
+class ReviewDecisionSelection(BaseModel):
+    issue_id: str = Field(..., min_length=1, max_length=80)
+    decision: Literal["accepted", "partially_accepted", "rejected"]
+    reason: str = Field(..., min_length=1, max_length=1000)
+
+
+class ReviewSessionContinueRequest(BaseModel):
+    request_id: str = Field(..., min_length=16, max_length=64)
+    decisions: list[ReviewDecisionSelection] = Field(default_factory=list, max_length=20)
+    instruction: Optional[str] = Field(None, max_length=4000)
+
+
+class ReviewSessionApplyRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=100000)
+
+
+class ReviewSessionInfo(BaseModel):
+    id: str
+    project_id: int
+    chapter_id: int
+    status: str
+    current_round: int
+    max_rounds: int
+    accept_score: int
+    initial_content: str
+    draft_content: str
+    latest_review: Optional[ContentReview] = None
+    review_history: list[dict] = Field(default_factory=list)
+    revision_decisions: list[dict] = Field(default_factory=list)
+    manual_decisions: list[dict] = Field(default_factory=list)
+    stop_reason: Optional[str] = None
+    last_error: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
 
 
 class ChapterMemoryGenerationRequest(BaseModel):

@@ -196,6 +196,7 @@ export interface GenerationJob {
     review_error?: string | null
     review_history?: GenerationReviewIteration[]
     revision_decisions?: RevisionDecision[]
+    review_session_id?: string | null
   }
   error: string | null
   created_at: string
@@ -232,6 +233,33 @@ export interface RevisionDecision {
   issue_id: string
   decision: 'accepted' | 'partially_accepted' | 'rejected'
   reason: string
+}
+
+export interface ReviewDecisionSelection {
+  issue_id: string
+  decision: 'accepted' | 'partially_accepted' | 'rejected'
+  reason: string
+}
+
+export interface ReviewSessionInfo {
+  id: string
+  project_id: number
+  chapter_id: number
+  status: 'awaiting_review' | 'completed' | 'applied' | string
+  current_round: number
+  max_rounds: number
+  accept_score: number
+  initial_content: string
+  draft_content: string
+  latest_review: GenerationReview | null
+  review_history: GenerationReviewIteration[]
+  revision_decisions: RevisionDecision[]
+  manual_decisions: RevisionDecision[]
+  stop_reason: string | null
+  last_error: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
 }
 
 export interface ReviewRuntimeConfig {

@@ -27,6 +27,8 @@ import type {
   ReviewRuntimeConfig,
   ReviewStats,
   ReviewPreferenceUpdate,
+  ReviewDecisionSelection,
+  ReviewSessionInfo,
 } from '../types'
 
 const TOKEN_KEY = 'novel-agent-token'
@@ -80,7 +82,7 @@ async function streamChapterContent(
   path: string,
   body: unknown,
   onChunk?: (chunk: string) => void,
-): Promise<{ content: string; meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: GenerationReviewIteration[]; revision_decisions?: RevisionDecision[] } }> {
+): Promise<{ content: string; meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: GenerationReviewIteration[]; revision_decisions?: RevisionDecision[]; review_session_id?: string | null } }> {
   const token = localStorage.getItem(TOKEN_KEY)
   const headers = new Headers({ 'Content-Type': 'application/json' })
   if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -93,7 +95,7 @@ async function streamChapterContent(
   const decoder = new TextDecoder()
   let buffer = ''
   let content = ''
-  let meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: GenerationReviewIteration[]; revision_decisions?: RevisionDecision[] } | null = null
+  let meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: GenerationReviewIteration[]; revision_decisions?: RevisionDecision[]; review_session_id?: string | null } | null = null
   const consume = (block: string) => {
     const line = block.split('\n').find(item => item.startsWith('data:'))
     if (!line) return
@@ -201,6 +203,17 @@ export const api = {
     }),
   getReviewStats: (projectId?: number) =>
     request<ReviewStats>(`/api/agent/review/stats${projectId ? `?project_id=${projectId}` : ''}`),
+  getReviewSession: (sessionId: string) => request<ReviewSessionInfo>(`/api/agent/review-sessions/${sessionId}`),
+  continueReviewSession: (sessionId: string, payload: { request_id: string; decisions: ReviewDecisionSelection[]; instruction?: string }) =>
+    request<ReviewSessionInfo>(`/api/agent/review-sessions/${sessionId}/continue`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  applyReviewSession: (sessionId: string, content: string) =>
+    request<ReviewSessionInfo>(`/api/agent/review-sessions/${sessionId}/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
   login: (username: string, password: string) =>
     request<AuthData>('/api/user/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   register: (username: string, password: string) =>
@@ -493,6 +506,7 @@ export const api = {
       review_stop_reason?: string
       review_history?: GenerationReviewIteration[]
       revision_decisions?: RevisionDecision[]
+      review_session_id?: string | null
     }>(`/api/agent/projects/${projectId}/chapters/${chapterId}/content`, {
       method: 'POST',
       body: JSON.stringify({ plan, user_idea: userIdea, knowledge_base_ids: knowledgeBaseIds }),
@@ -526,6 +540,7 @@ export const api = {
         review_error: result.meta.review_error,
         review_history: result.meta.review_history,
         revision_decisions: result.meta.revision_decisions,
+        review_session_id: result.meta.review_session_id,
       }
     }
     const task = await request<{ job_id: string }>(
@@ -564,6 +579,7 @@ export const api = {
           review_error: status.generation_info?.review_error,
           review_history: status.generation_info?.review_history,
           revision_decisions: status.generation_info?.revision_decisions,
+          review_session_id: status.generation_info?.review_session_id,
         }
       if (status.status === 'failed') throw new ApiError(status.error || '章节生成失败，请稍后重试')
       if (status.status === 'cancelled') throw new ApiError('生成任务已取消，可在生成历史中重新生成')

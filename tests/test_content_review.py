@@ -9,6 +9,7 @@ from services.chapter_generation import validate_content_quality
 from services.content_review import (
     is_review_acceptable,
     parse_revision_output,
+    revise_review_session_once,
     review_content,
     run_review_loop,
     reviewer_model_settings,
@@ -222,6 +223,46 @@ class ContentReviewTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.stop_reason, "threshold_reached")
         self.assertEqual(result.revision_decisions[0].round, 1)
+
+    async def test_manual_revision_uses_selected_decisions_and_reviews_the_new_draft(self):
+        review = ContentReview.model_validate(json.loads(self.review_json(90)))
+        generation_client = SimpleNamespace(
+            achat=AsyncMock(return_value=json.dumps({
+                "content": self.content + "修订" * 30,
+                "revision_decisions": [{
+                    "issue_id": "issue-1", "decision": "accepted", "reason": "补充心理描写",
+                }],
+            }, ensure_ascii=False)),
+        )
+        reviewer = SimpleNamespace(achat=AsyncMock(return_value=self.review_json(92)))
+
+        @asynccontextmanager
+        async def generation_factory():
+            yield generation_client
+
+        @asynccontextmanager
+        async def reviewer_factory():
+            yield reviewer
+
+        result = await revise_review_session_once(
+            self.context,
+            self.content,
+            review,
+            generation_factory,
+            lambda _: 500,
+            lambda value: validate_content_quality(value, 3000),
+            manual_decisions=[RevisionDecision(
+                issue_id="issue-1", decision="partially_accepted", reason="保留伏笔",
+            )],
+            instruction="不要改变结尾悬念",
+            reviewer_client_factory=reviewer_factory,
+        )
+
+        self.assertEqual(result[1].overall_score, 92)
+        self.assertEqual(result[2][0].decision, "accepted")
+        prompt = generation_client.achat.await_args.args[0][1]["content"]
+        self.assertIn("保留伏笔", prompt)
+        self.assertIn("不要改变结尾悬念", prompt)
 
     async def test_manual_approval_returns_after_first_review_without_generating_revision(self):
         client = SimpleNamespace(

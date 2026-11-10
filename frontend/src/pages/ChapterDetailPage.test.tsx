@@ -17,6 +17,9 @@ vi.mock('../api/client', () => ({
     cancelChapterContentJob: vi.fn(),
     retryChapterContentJob: vi.fn(),
     getChapterVersions: vi.fn(),
+    getReviewSession: vi.fn(),
+    continueReviewSession: vi.fn(),
+    applyReviewSession: vi.fn(),
   },
 }))
 
@@ -56,6 +59,66 @@ beforeEach(() => {
   vi.mocked(api.listChapterContentJobs).mockResolvedValue([])
   vi.mocked(api.retryChapterContentJob).mockResolvedValue({ job_id: 'job-2', source_job_id: 'job-1', status: 'queued' })
   vi.mocked(api.getChapterVersions).mockResolvedValue([])
+  vi.mocked(api.getReviewSession).mockResolvedValue({
+    id: 'review-1',
+    project_id: chapter.project_id,
+    chapter_id: chapter.id,
+    status: 'awaiting_review',
+    current_round: 1,
+    max_rounds: 3,
+    accept_score: 85,
+    initial_content: '初稿',
+    draft_content: '初稿',
+    latest_review: null,
+    review_history: [],
+    revision_decisions: [],
+    manual_decisions: [],
+    stop_reason: 'manual_approval_required',
+    last_error: null,
+    created_at: chapter.created_at,
+    updated_at: chapter.updated_at,
+    completed_at: null,
+  })
+  vi.mocked(api.continueReviewSession).mockResolvedValue({
+    id: 'review-1',
+    project_id: chapter.project_id,
+    chapter_id: chapter.id,
+    status: 'completed',
+    current_round: 2,
+    max_rounds: 3,
+    accept_score: 85,
+    initial_content: '初稿',
+    draft_content: '修订稿',
+    latest_review: null,
+    review_history: [],
+    revision_decisions: [],
+    manual_decisions: [],
+    stop_reason: 'threshold_reached',
+    last_error: null,
+    created_at: chapter.created_at,
+    updated_at: chapter.updated_at,
+    completed_at: chapter.updated_at,
+  })
+  vi.mocked(api.applyReviewSession).mockResolvedValue({
+    id: 'review-1',
+    project_id: chapter.project_id,
+    chapter_id: chapter.id,
+    status: 'applied',
+    current_round: 1,
+    max_rounds: 3,
+    accept_score: 85,
+    initial_content: '初稿',
+    draft_content: '初稿',
+    latest_review: null,
+    review_history: [],
+    revision_decisions: [],
+    manual_decisions: [],
+    stop_reason: 'manual_applied',
+    last_error: null,
+    created_at: chapter.created_at,
+    updated_at: chapter.updated_at,
+    completed_at: chapter.updated_at,
+  })
   vi.mocked(api.generateChapterMemory).mockResolvedValue({
     project_id: chapter.project_id,
     chapter_id: chapter.id,
@@ -203,6 +266,53 @@ describe('章节详情页', () => {
     )
     expect((screen.getByLabelText('章节内容') as HTMLTextAreaElement).value).toBe('智能生成的章节正文')
     expect(api.updateChapter).not.toHaveBeenCalled()
+  })
+
+  it('人工审核模式可以选择建议并继续修订', async () => {
+    vi.mocked(api.generateChapterContent).mockResolvedValue({
+      project_id: chapter.project_id,
+      chapter_id: chapter.id,
+      expected_words: 2500,
+      plan: { objective: '目标', conflict: '冲突', key_events: '事件', ending_hook: '钩子', expected_words: 2500 },
+      content: '初稿正文',
+      review_enabled: true,
+      review_rounds: 1,
+      review_final_score: 70,
+      review_stop_reason: 'manual_approval_required',
+      review_session_id: 'review-1',
+      review_history: [{
+        round: 1,
+        score: 70,
+        review: {
+          overall_score: 70,
+          summary: '需要继续打磨',
+          strengths: [],
+          issues: [{ id: 'issue-1', category: 'style', severity: 'major', evidence: '过渡较快', suggestion: '补充过渡', must_fix: false }],
+          dimension_scores: { style: 70 },
+          stop_recommendation: false,
+        },
+      }],
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: '启航' })
+    await userEvent.click(screen.getByRole('button', { name: '编辑章节' }))
+    await userEvent.type(
+      screen.getByLabelText('本章细纲'),
+      '本章目标：完成启航\n核心冲突：面对未知风险\n关键情节：飞船离港\n结尾钩子：留下悬念',
+    )
+    await userEvent.click(screen.getByRole('button', { name: '按细纲生成正文' }))
+    await userEvent.click(screen.getByRole('button', { name: '生成章节' }))
+
+    expect(await screen.findByRole('heading', { name: '人工确认后继续修订' })).toBeTruthy()
+    await userEvent.selectOptions(screen.getByLabelText('处理评审问题 issue-1'), 'accepted')
+    await userEvent.type(screen.getByLabelText('作者补充说明（可选）'), '不要改变结尾悬念')
+    await userEvent.click(screen.getByRole('button', { name: '按选择继续修订' }))
+
+    expect(api.continueReviewSession).toHaveBeenCalledWith('review-1', {
+      request_id: expect.any(String),
+      decisions: [{ issue_id: 'issue-1', decision: 'accepted', reason: '作者已确认按此选择处理' }],
+      instruction: '不要改变结尾悬念',
+    })
   })
 
   it('编辑章节时显示章节细纲智能生成入口并将结果填入单个细纲输入框', async () => {
