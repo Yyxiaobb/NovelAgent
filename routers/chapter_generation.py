@@ -101,20 +101,9 @@ from agent.runtime import run_agent
 
 from agent.skills import load_skill
 from services.generation_runtime import generation_client, reviewer_client
+from services.generation_jobs import generation_job_payload
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
-
-GENERATION_INFO_KEYS = (
-    "model", "prompt_template_id", "prompt_template_version", "segments", "quality_check",
-    "review_enabled", "review_rounds", "review_final_score", "review_stop_reason", "review_error",
-    "review_history", "revision_decisions", "review_session_id",
-)
-
-
-def _generation_info(result: dict | None) -> dict:
-    result = result or {}
-    return {key: result.get(key) for key in GENERATION_INFO_KEYS if result.get(key) is not None}
-
 
 @router.get("/review/config")
 async def get_review_config(user: User = Depends(get_current_user)):
@@ -658,20 +647,9 @@ async def get_chapter_content_job(job_id: str, user: User = Depends(get_current_
         job = await generation_crud.get_job(db, job_id, user.id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="生成任务不存在或已过期")
-    result = job.result or {}
     return success_response(
         message="获取生成任务状态成功",
-        data={
-            "job_id": job.id,
-            "status": job.status,
-            "progress": job.progress,
-            "content": job.output_content or "",
-            "expected_words": result.get("expected_words"),
-            "plan": result.get("plan"),
-            "citations": result.get("citations", []),
-            "generation_info": _generation_info(result),
-            "error": job.error_message,
-        },
+        data=generation_job_payload(job),
     )
 
 
@@ -692,26 +670,7 @@ async def list_chapter_content_jobs(
         )
     return success_response(
         message="获取生成任务列表成功",
-        data=[
-            {
-                "job_id": job.id,
-                "project_id": job.project_id,
-                "chapter_id": job.chapter_id,
-                "job_type": job.job_type,
-                "status": job.status,
-                "progress": job.progress,
-                "content": job.output_content or "",
-                "expected_words": (job.result or {}).get("expected_words"),
-                "plan": (job.result or {}).get("plan"),
-                "citations": (job.result or {}).get("citations", []),
-                "generation_info": _generation_info(job.result),
-                "error": job.error_message,
-                "created_at": job.created_at.isoformat(),
-                "updated_at": job.updated_at.isoformat(),
-                "finished_at": job.finished_at.isoformat() if job.finished_at else None,
-            }
-            for job in jobs
-        ],
+        data=[generation_job_payload(job, include_scope=True) for job in jobs],
     )
 
 

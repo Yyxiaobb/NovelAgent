@@ -79,38 +79,55 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return envelope.data
 }
 
-async function streamChapterContent(
+type ChapterStreamMeta = {
+  expected_words: number
+  plan: ChapterPlan
+  citations?: KnowledgeCitation[]
+  review_enabled?: boolean
+  review_rounds?: number
+  review_final_score?: number | null
+  review_stop_reason?: string
+  review_error?: string | null
+  review_history?: GenerationReviewIteration[]
+  revision_decisions?: RevisionDecision[]
+  review_session_id?: string | null
+}
+
+type OutlineStreamMeta = { project_id: number; expected_words: number; citations?: KnowledgeCitation[] }
+
+async function streamSse<T>(
   path: string,
   body: unknown,
+  incompleteMessage: string,
   onChunk?: (chunk: string) => void,
-): Promise<{ content: string; meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: GenerationReviewIteration[]; revision_decisions?: RevisionDecision[]; review_session_id?: string | null } }> {
+): Promise<T> {
   const token = localStorage.getItem(TOKEN_KEY)
   const headers = new Headers({ 'Content-Type': 'application/json' })
-  if (token) headers.set('Authorization', `Bearer ${token}`)
-  const response = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body), credentials: 'include' })
+  if (token) headers.set('Authorization', 'Bearer ' + token)
+  let response: Response
+  try {
+    response = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body), credentials: 'include' })
+  } catch {
+    throw new ApiError('无法连接服务器，请确认后端服务已启动')
+  }
   if (!response.ok || !response.body) {
     const payload = await response.json().catch(() => null)
     throw new ApiError(errorMessage(payload), response.status)
   }
+
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  let content = ''
-  let meta: { expected_words: number; plan: ChapterPlan; citations?: KnowledgeCitation[]; review_enabled?: boolean; review_rounds?: number; review_final_score?: number | null; review_stop_reason?: string; review_error?: string | null; review_history?: GenerationReviewIteration[]; revision_decisions?: RevisionDecision[]; review_session_id?: string | null } | null = null
+  let donePayload: T | undefined
   const consume = (block: string) => {
     const line = block.split('\n').find(item => item.startsWith('data:'))
     if (!line) return
     const event = JSON.parse(line.slice(5).trim()) as { event: string; data: unknown }
-    if (event.event === 'chunk') {
-      const chunk = String(event.data)
-      content += chunk
-      onChunk?.(chunk)
-    } else if (event.event === 'done') {
-      meta = event.data as typeof meta
-    } else if (event.event === 'error') {
-      throw new ApiError(String(event.data))
-    }
+    if (event.event === 'chunk') onChunk?.(String(event.data))
+    else if (event.event === 'done') donePayload = event.data as T
+    else if (event.event === 'error') throw new ApiError(String(event.data))
   }
+
   while (true) {
     const { value, done } = await reader.read()
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
@@ -120,7 +137,20 @@ async function streamChapterContent(
     if (done) break
   }
   if (buffer.trim()) consume(buffer)
-  if (!meta) throw new ApiError('模型未返回完整章节内容')
+  if (donePayload === undefined) throw new ApiError(incompleteMessage)
+  return donePayload
+}
+
+async function streamChapterContent(
+  path: string,
+  body: unknown,
+  onChunk?: (chunk: string) => void,
+): Promise<{ content: string; meta: ChapterStreamMeta }> {
+  let content = ''
+  const meta = await streamSse<ChapterStreamMeta>(path, body, '模型未返回完整章节内容', chunk => {
+    content += chunk
+    onChunk?.(chunk)
+  })
   return { content, meta }
 }
 
@@ -131,53 +161,18 @@ async function streamProjectOutline(
   knowledgeBaseIds: number[] = [],
   inspirationIds: number[] = [],
   onChunk?: (chunk: string) => void,
-): Promise<{ project_id: number; expected_words: number; citations?: KnowledgeCitation[] }> {
-  const token = localStorage.getItem(TOKEN_KEY)
-  const headers = new Headers({ 'Content-Type': 'application/json' })
-  if (token) headers.set('Authorization', `Bearer ${token}`)
-  let response: Response
-  try {
-    response = await fetch(`/api/agent/projects/${projectId}/outline/stream`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        expected_words: expectedWords,
-        user_idea: userIdea,
-        inspiration_ids: inspirationIds,
-        knowledge_base_ids: knowledgeBaseIds,
-      }),
-      credentials: 'include',
-    })
-  } catch {
-    throw new ApiError('无法连接服务器，请确认后端服务已启动')
-  }
-  if (!response.ok || !response.body) {
-    const payload = await response.json().catch(() => null)
-    throw new ApiError(errorMessage(payload), response.status)
-  }
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let meta: { project_id: number; expected_words: number; citations?: KnowledgeCitation[] } | null = null
-  const consume = (block: string) => {
-    const line = block.split('\n').find(item => item.startsWith('data:'))
-    if (!line) return
-    const event = JSON.parse(line.slice(5).trim()) as { event: string; data: unknown }
-    if (event.event === 'chunk') onChunk?.(String(event.data))
-    else if (event.event === 'done') meta = event.data as typeof meta
-    else if (event.event === 'error') throw new ApiError(String(event.data))
-  }
-  while (true) {
-    const { value, done } = await reader.read()
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
-    const blocks = buffer.split('\n\n')
-    buffer = blocks.pop() || ''
-    blocks.forEach(consume)
-    if (done) break
-  }
-  if (buffer.trim()) consume(buffer)
-  if (!meta) throw new ApiError('大纲生成未完成，请稍后重试')
-  return meta
+): Promise<OutlineStreamMeta> {
+  return streamSse<OutlineStreamMeta>(
+    '/api/agent/projects/' + projectId + '/outline/stream',
+    {
+      expected_words: expectedWords,
+      user_idea: userIdea,
+      inspiration_ids: inspirationIds,
+      knowledge_base_ids: knowledgeBaseIds,
+    },
+    '大纲生成未完成，请稍后重试',
+    onChunk,
+  )
 }
 
 export const tokenStore = {
