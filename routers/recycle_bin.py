@@ -16,6 +16,20 @@ router = APIRouter(prefix="/api/recycle-bin", tags=["recycle-bin"])
 legacy_router = APIRouter(prefix="/api/project", tags=["projects"], deprecated=True)
 
 
+def _knowledge_base_info(base) -> KnowledgeBaseInfo:
+    documents = base.documents
+    return KnowledgeBaseInfo(
+        id=base.id,
+        name=base.name,
+        description=base.description,
+        document_count=len(documents),
+        ready_document_count=sum(document.status == "ready" for document in documents),
+        created_at=base.created_at,
+        updated_at=base.updated_at,
+        is_deleted=base.is_deleted,
+    )
+
+
 async def _move_project(project_id: int, db: AsyncSession, user: User):
     project = await recycle_bin.move_project_to_recycle_bin(db, project_id, user.id)
     if project is None:
@@ -180,12 +194,7 @@ async def permanently_delete_outline_volume(
 @router.get("/knowledge-bases")
 async def get_recycled_knowledge_bases(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     bases = await recycle_bin.get_recycled_knowledge_bases(db, user.id)
-    response = [KnowledgeBaseInfo(
-        id=base.id, name=base.name, description=base.description,
-        document_count=len(base.documents),
-        ready_document_count=sum(document.status == "ready" for document in base.documents),
-        created_at=base.created_at, updated_at=base.updated_at, is_deleted=base.is_deleted,
-    ) for base in bases]
+    response = [_knowledge_base_info(base) for base in bases]
     return success_response(message="获取回收站知识库成功", data=response)
 
 
@@ -202,12 +211,7 @@ async def restore_knowledge_base(
     base = await recycle_bin.restore_knowledge_base(db, base_id, user.id)
     if base is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="回收站中不存在该知识库")
-    return success_response(message="知识库已还原", data=KnowledgeBaseInfo(
-        id=base.id, name=base.name, description=base.description,
-        document_count=len(base.documents),
-        ready_document_count=sum(document.status == "ready" for document in base.documents),
-        created_at=base.created_at, updated_at=base.updated_at, is_deleted=base.is_deleted,
-    ))
+    return success_response(message="知识库已还原", data=_knowledge_base_info(base))
 
 
 @router.delete("/knowledge-bases/{base_id}")
