@@ -102,6 +102,55 @@ def _cover_svg(*, title: str, subtitle: str, mood: str, author_name: str, primar
 </svg>'''
 
 
+async def _prepare_outline_context(
+    db: AsyncSession, project_id: int, payload: OutlineGenerationRequest, user: User
+):
+    project = await projects.get_project(db, project_id, user.id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品不存在或已在回收站")
+
+    try:
+        selected_inspirations = await inspirations.get_inspirations_for_generation(
+            db, user.id, payload.inspiration_ids
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    template, prompt = render_prompt(
+        "project_outline",
+        project_type=project.project_type or "未指定",
+        project_introduction=project.introduction or "未提供",
+        user_idea=payload.user_idea.strip() if payload.user_idea and payload.user_idea.strip() else "未提供",
+        inspiration_context=format_inspiration_context(selected_inspirations),
+        expected_words=payload.expected_words,
+    )
+    citations = []
+    if payload.knowledge_base_ids:
+        try:
+            citations = await retrieve_knowledge(
+                db,
+                user_id=user.id,
+                knowledge_base_ids=payload.knowledge_base_ids,
+                query="\n".join(
+                    (
+                        project.project_type or "",
+                        project.introduction or "",
+                        payload.user_idea or "",
+                        f"目标字数 {payload.expected_words}",
+                    )
+                ),
+            )
+        except PermissionError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except EmbeddingConfigurationError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except EmbeddingRequestError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        prompt += format_retrieved_context(citations)
+    return project, template, prompt, citations
+
+
 @router.post("/refine-idea", response_model=None)
 async def refine_idea(
     payload: IdeaRefinementRequest,
@@ -237,49 +286,7 @@ async def generate_project_outline(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    project = await projects.get_project(db, project_id, user.id)
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品不存在或已在回收站")
-
-    try:
-        selected_inspirations = await inspirations.get_inspirations_for_generation(
-            db, user.id, payload.inspiration_ids
-        )
-    except PermissionError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    template, prompt = render_prompt(
-        "project_outline",
-        project_type=project.project_type or "未指定",
-        project_introduction=project.introduction or "未提供",
-        user_idea=payload.user_idea.strip() if payload.user_idea and payload.user_idea.strip() else "未提供",
-        inspiration_context=format_inspiration_context(selected_inspirations),
-        expected_words=payload.expected_words,
-    )
-    citations = []
-    if payload.knowledge_base_ids:
-        try:
-            citations = await retrieve_knowledge(
-                db,
-                user_id=user.id,
-                knowledge_base_ids=payload.knowledge_base_ids,
-                query="\n".join(
-                    (
-                        project.project_type or "",
-                        project.introduction or "",
-                        payload.user_idea or "",
-                        f"目标字数 {payload.expected_words}",
-                    )
-                ),
-            )
-        except PermissionError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        except EmbeddingConfigurationError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
-        except EmbeddingRequestError as error:
-            raise HTTPException(status_code=502, detail=str(error)) from error
-        prompt += format_retrieved_context(citations)
+    project, template, prompt, citations = await _prepare_outline_context(db, project_id, payload, user)
     try:
         async with generation_client(timeout=300) as client:
             model_started = perf_counter()
@@ -341,47 +348,7 @@ async def generate_project_outline_stream(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    project = await projects.get_project(db, project_id, user.id)
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品不存在或已在回收站")
-
-    try:
-        selected_inspirations = await inspirations.get_inspirations_for_generation(
-            db, user.id, payload.inspiration_ids
-        )
-    except PermissionError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    template, prompt = render_prompt(
-        "project_outline",
-        project_type=project.project_type or "未指定",
-        project_introduction=project.introduction or "未提供",
-        user_idea=payload.user_idea.strip() if payload.user_idea and payload.user_idea.strip() else "未提供",
-        inspiration_context=format_inspiration_context(selected_inspirations),
-        expected_words=payload.expected_words,
-    )
-    citations = []
-    if payload.knowledge_base_ids:
-        try:
-            citations = await retrieve_knowledge(
-                db,
-                user_id=user.id,
-                knowledge_base_ids=payload.knowledge_base_ids,
-                query="\n".join((
-                    project.project_type or "",
-                    project.introduction or "",
-                    payload.user_idea or "",
-                    f"目标字数 {payload.expected_words}",
-                )),
-            )
-        except PermissionError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        except EmbeddingConfigurationError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
-        except EmbeddingRequestError as error:
-            raise HTTPException(status_code=502, detail=str(error)) from error
-        prompt += format_retrieved_context(citations)
+    project, template, prompt, citations = await _prepare_outline_context(db, project_id, payload, user)
 
     async def events():
         started = perf_counter()
