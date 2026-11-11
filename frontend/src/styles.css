@@ -2760,6 +2760,38 @@ p {
   color: var(--ink);
   font-size: 13px;
 }
+
+.review-session-history {
+  display: grid;
+  gap: 10px;
+}
+
+.review-session-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(110px, 1fr) minmax(90px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.review-session-row span,
+.review-session-row small {
+  color: var(--muted);
+}
+
+.settings-empty {
+  color: var(--muted);
+  margin: 0;
+}
+
+@media (max-width: 760px) {
+  .review-session-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
 .settings-inline-warning {
   grid-column: 1 / -1;
   margin: 0;

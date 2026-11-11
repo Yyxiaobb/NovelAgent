@@ -29,6 +29,7 @@ import type {
   ReviewPreferenceUpdate,
   ReviewDecisionSelection,
   ReviewSessionInfo,
+  ReviewSessionSummary,
 } from '../types'
 
 const TOKEN_KEY = 'novel-agent-token'
@@ -203,6 +204,16 @@ export const api = {
     }),
   getReviewStats: (projectId?: number) =>
     request<ReviewStats>(`/api/agent/review/stats${projectId ? `?project_id=${projectId}` : ''}`),
+  getReviewSessions: (params: { projectId?: number; chapterId?: number; status?: string; limit?: number; offset?: number } = {}) => {
+    const query = new URLSearchParams()
+    if (params.projectId !== undefined) query.set('project_id', String(params.projectId))
+    if (params.chapterId !== undefined) query.set('chapter_id', String(params.chapterId))
+    if (params.status) query.set('status', params.status)
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return request<{ items: ReviewSessionSummary[]; total: number; limit: number; offset: number }>(`/api/agent/review-sessions${suffix}`)
+  },
   getReviewSession: (sessionId: string) => request<ReviewSessionInfo>(`/api/agent/review-sessions/${sessionId}`),
   continueReviewSession: (sessionId: string, payload: { request_id: string; decisions: ReviewDecisionSelection[]; instruction?: string }) =>
     request<ReviewSessionInfo>(`/api/agent/review-sessions/${sessionId}/continue`, {

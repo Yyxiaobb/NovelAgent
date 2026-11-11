@@ -215,6 +215,24 @@ class ReviewSessionInfo(BaseModel):
     completed_at: Optional[datetime] = None
 
 
+class ReviewSessionSummary(BaseModel):
+    """Small paginated history item that omits draft and review payloads."""
+
+    id: str
+    project_id: int
+    chapter_id: int
+    generation_job_id: Optional[str] = None
+    status: str
+    current_round: int
+    max_rounds: int
+    accept_score: int
+    latest_score: Optional[int] = None
+    stop_reason: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
+
+
 class ChapterMemoryGenerationRequest(BaseModel):
     user_idea: Optional[str] = Field(None, max_length=3000)
 

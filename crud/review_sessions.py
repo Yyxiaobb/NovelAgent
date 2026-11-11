@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.review_sessions import ReviewSession
@@ -18,15 +18,42 @@ async def list_review_sessions(
     user_id: int,
     *,
     project_id: int | None = None,
+    chapter_id: int | None = None,
+    status: str | None = None,
     limit: int = 5000,
+    offset: int = 0,
 ) -> list[ReviewSession]:
     query = select(ReviewSession).where(ReviewSession.user_id == user_id)
     if project_id is not None:
         query = query.where(ReviewSession.project_id == project_id)
+    if chapter_id is not None:
+        query = query.where(ReviewSession.chapter_id == chapter_id)
+    if status is not None:
+        query = query.where(ReviewSession.status == status)
     result = await db.scalars(
-        query.order_by(ReviewSession.created_at.desc()).limit(max(1, min(limit, 5000)))
+        query.order_by(ReviewSession.created_at.desc())
+        .offset(max(0, offset))
+        .limit(max(1, min(limit, 5000)))
     )
     return list(result.all())
+
+
+async def count_review_sessions(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    project_id: int | None = None,
+    chapter_id: int | None = None,
+    status: str | None = None,
+) -> int:
+    query = select(func.count()).select_from(ReviewSession).where(ReviewSession.user_id == user_id)
+    if project_id is not None:
+        query = query.where(ReviewSession.project_id == project_id)
+    if chapter_id is not None:
+        query = query.where(ReviewSession.chapter_id == chapter_id)
+    if status is not None:
+        query = query.where(ReviewSession.status == status)
+    return int((await db.scalar(query)) or 0)
 
 
 async def create_session(

@@ -14,17 +14,19 @@ export function SettingsPage() {
   const [changingPassword, setChangingPassword] = useState(false)
   const [reviewConfig, setReviewConfig] = useState<Awaited<ReturnType<typeof api.getReviewConfig>> | null>(null)
   const [reviewStats, setReviewStats] = useState<Awaited<ReturnType<typeof api.getReviewStats>> | null>(null)
+  const [reviewSessions, setReviewSessions] = useState<Awaited<ReturnType<typeof api.getReviewSessions>> | null>(null)
   const [reviewForm, setReviewForm] = useState({ enabled: false, max_rounds: 3, accept_score: 85, manual_approval: false })
   const [savingReview, setSavingReview] = useState(false)
   const [reviewConfigError, setReviewConfigError] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
-    void Promise.all([api.getReviewPreferences(), api.getReviewStats()])
-      .then(([config, stats]) => {
+    void Promise.all([api.getReviewPreferences(), api.getReviewStats(), api.getReviewSessions({ limit: 8 })])
+      .then(([config, stats, sessions]) => {
         if (active) {
           setReviewConfig(config)
           setReviewStats(stats)
+          setReviewSessions(sessions)
           setReviewForm({
             enabled: config.enabled,
             max_rounds: config.max_rounds,
@@ -255,6 +257,27 @@ export function SettingsPage() {
             </div>
           </div>
         )}
+      </section>
+      <section className="settings-panel">
+        <div className="panel-title">
+          <span className="panel-title-icon neutral"><ShieldCheck size={19} /></span>
+          <div>
+            <h2>最近评审会话</h2>
+            <p>只展示轻量摘要；点击章节页中的评审结果可查看完整正文和评审意见。</p>
+          </div>
+        </div>
+        {reviewSessions && (reviewSessions.items.length > 0 ? (
+          <div className="review-session-history" aria-label="最近评审会话">
+            {reviewSessions.items.map(session => (
+              <div className="review-session-row" key={session.id}>
+                <strong>作品 #{session.project_id} · 第 {session.chapter_id} 章</strong>
+                <span>{session.status === 'awaiting_review' ? '等待人工评审' : session.status === 'applied' ? '已应用' : session.status === 'completed' ? '已完成' : session.status}</span>
+                <span>{session.latest_score === null ? '暂无评分' : `评分 ${session.latest_score} 分`}</span>
+                <small>{session.current_round}/{session.max_rounds} 轮 · {new Date(session.updated_at).toLocaleString()}</small>
+              </div>
+            ))}
+          </div>
+        ) : <p className="settings-empty">暂无人工评审会话</p>)}
       </section>
       <section className="settings-panel danger-panel">
         <div className="panel-title">

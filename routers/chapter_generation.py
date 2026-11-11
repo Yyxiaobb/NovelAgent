@@ -5,7 +5,7 @@ from typing import Any
 
 from time import perf_counter
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
@@ -47,6 +47,7 @@ from schemas.agent import (
     ReviewSessionApplyRequest,
     ReviewSessionContinueRequest,
     ReviewSessionInfo,
+    ReviewSessionSummary,
     RevisionDecision,
 )
 
@@ -215,6 +216,66 @@ async def get_review_stats(
     jobs = await generation_crud.list_review_jobs(db, user.id, project_id=project_id)
     sessions = await review_sessions_crud.list_review_sessions(db, user.id, project_id=project_id)
     return success_response(message="获取评审统计成功", data=summarize_review_jobs(jobs, sessions))
+
+
+def _review_session_summary(session: Any) -> ReviewSessionSummary:
+    latest_review = session.latest_review if isinstance(session.latest_review, dict) else {}
+    latest_score = latest_review.get("overall_score")
+    return ReviewSessionSummary(
+        id=session.id,
+        project_id=session.project_id,
+        chapter_id=session.chapter_id,
+        generation_job_id=session.generation_job_id,
+        status=session.status,
+        current_round=session.current_round,
+        max_rounds=session.max_rounds,
+        accept_score=session.accept_score,
+        latest_score=int(latest_score) if isinstance(latest_score, (int, float)) else None,
+        stop_reason=session.stop_reason,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        completed_at=session.completed_at,
+    )
+
+
+@router.get("/review-sessions")
+async def list_review_session_history(
+    project_id: int | None = None,
+    chapter_id: int | None = None,
+    status: str | None = Query(None, min_length=1, max_length=24),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return bounded review history without loading large draft payloads."""
+    if project_id is not None and await projects.get_project(db, project_id, user.id) is None:
+        raise HTTPException(status_code=404, detail="作品不存在或无权访问")
+    sessions = await review_sessions_crud.list_review_sessions(
+        db,
+        user.id,
+        project_id=project_id,
+        chapter_id=chapter_id,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
+    total = await review_sessions_crud.count_review_sessions(
+        db,
+        user.id,
+        project_id=project_id,
+        chapter_id=chapter_id,
+        status=status,
+    )
+    return success_response(
+        message="获取评审会话列表成功",
+        data={
+            "items": [_review_session_summary(session) for session in sessions],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        },
+    )
 
 
 @router.get("/review-sessions/{session_id}")

@@ -262,6 +262,22 @@ export interface ReviewSessionInfo {
   completed_at: string | null
 }
 
+export interface ReviewSessionSummary {
+  id: string
+  project_id: number
+  chapter_id: number
+  generation_job_id: string | null
+  status: string
+  current_round: number
+  max_rounds: number
+  accept_score: number
+  latest_score: number | null
+  stop_reason: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
 export interface ReviewRuntimeConfig {
   enabled: boolean
   max_rounds: number

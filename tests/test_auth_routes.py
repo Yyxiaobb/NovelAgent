@@ -121,6 +121,15 @@ class AuthRouteTests(unittest.IsolatedAsyncioTestCase):
         review_session_response = await self.client.get(f"/api/agent/review-sessions/{review_session_id}")
         self.assertEqual(review_session_response.status_code, 200)
         self.assertEqual(review_session_response.json()["data"]["status"], "awaiting_review")
+        review_history_response = await self.client.get(
+            f"/api/agent/review-sessions?project_id={project_id}&status=awaiting_review&limit=10"
+        )
+        self.assertEqual(review_history_response.status_code, 200)
+        review_history = review_history_response.json()["data"]
+        self.assertEqual(review_history["total"], 1)
+        self.assertEqual(review_history["items"][0]["id"], review_session_id)
+        self.assertEqual(review_history["items"][0]["latest_score"], 70)
+        self.assertNotIn("draft_content", review_history["items"][0])
         applied = await self.client.post(
             f"/api/agent/review-sessions/{review_session_id}/apply",
             json={"content": "人工确认后的正文"},
