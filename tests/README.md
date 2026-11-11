@@ -21,3 +21,9 @@ python -m pip install httpx aiosqlite
 ## 模型接入层
 
 `test_llm_client.py` 覆盖环境配置优先级、参数校验、同步/异步调用、流式输出、工具响应透传、错误处理与资源释放。通过 `httpx.MockTransport` 测试真实 SDK，不连接第三方模型、不消耗额度。所需依赖见 `agent/requirements.txt`。
+
+评论员离线回归评测也会作为 CI 检查运行；它使用固定 JSON 样本，不连接模型服务：
+
+```powershell
+python -m services.review_evaluation
+```

@@ -37,6 +37,9 @@ jobs:
       - name: Run Python lint checks
         run: python -m ruff check .
 
+      - name: Run offline reviewer regression evaluation
+        run: python -m services.review_evaluation
+
       - name: Audit Python dependencies
         run: python -m pip install pip-audit && python -m pip_audit -r requirements-dev.txt
 
@@ -50,7 +53,7 @@ jobs:
         run: python -m alembic upgrade head
 
       - name: Verify migration head
-        run: python -m alembic heads | grep -q "^0008_inspirations "
+        run: python -m alembic heads | grep -q "^0017_review_sessions "
 
   frontend:
     name: Frontend tests and build

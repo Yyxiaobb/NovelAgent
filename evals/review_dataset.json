@@ -1,0 +1,96 @@
+{
+  "version": "2026-11-11",
+  "description": "离线评论员评审回归样本，不调用真实模型",
+  "cases": [
+    {
+      "id": "harbor-opening",
+      "content": "暴雨前的海港亮起一盏盏黄灯，沈砚在旧码头发现了本应沉入海底的航海日志。",
+      "repeated_reviews": [
+        {
+          "overall_score": 82,
+          "summary": "场景有张力，但线索回收仍需铺垫。",
+          "strengths": ["氛围鲜明"],
+          "issues": [{"id": "foreshadowing", "category": "ending", "severity": "major", "evidence": "日志出现较突然", "suggestion": "补充来源暗示", "must_fix": false}],
+          "dimension_scores": {"goal": 82, "continuity": 80, "character": 81, "causality": 79, "style": 85, "pacing": 82, "ending": 80},
+          "stop_recommendation": false
+        },
+        {
+          "overall_score": 83,
+          "summary": "场景有张力，但线索回收仍需铺垫。",
+          "strengths": ["氛围鲜明"],
+          "issues": [{"id": "foreshadowing", "category": "ending", "severity": "major", "evidence": "日志出现较突然", "suggestion": "补充来源暗示", "must_fix": false}],
+          "dimension_scores": {"goal": 83, "continuity": 81, "character": 82, "causality": 80, "style": 85, "pacing": 83, "ending": 81},
+          "stop_recommendation": false
+        }
+      ],
+      "revision": {
+        "before": {
+          "overall_score": 72,
+          "summary": "需要补足因果和人物动机。",
+          "strengths": [],
+          "issues": [
+            {"id": "motivation", "category": "character", "severity": "major", "evidence": "沈砚直接打开日志", "suggestion": "交代他寻找日志的动机", "must_fix": true},
+            {"id": "tempo", "category": "pacing", "severity": "minor", "evidence": "冲突转折过快", "suggestion": "增加一个过渡动作", "must_fix": false}
+          ],
+          "dimension_scores": {"goal": 70, "continuity": 71, "character": 68, "causality": 69, "style": 77, "pacing": 72, "ending": 75},
+          "stop_recommendation": false
+        },
+        "after": {
+          "overall_score": 88,
+          "summary": "动机和转折已经清晰。",
+          "strengths": ["动机明确"],
+          "issues": [],
+          "dimension_scores": {"goal": 88, "continuity": 87, "character": 89, "causality": 88, "style": 87, "pacing": 86, "ending": 90},
+          "stop_recommendation": true
+        },
+        "decisions": [
+          {"round": 1, "issue_id": "motivation", "decision": "accepted", "reason": "补充寻找日志的动机不会改变主线"},
+          {"round": 1, "issue_id": "tempo", "decision": "rejected", "reason": "过渡会削弱开场的紧迫感"}
+        ]
+      }
+    },
+    {
+      "id": "winter-letter",
+      "content": "顾遥在雪夜收到一封没有署名的信，信中准确写出了她明天将要失去的东西。",
+      "repeated_reviews": [
+        {
+          "overall_score": 91,
+          "summary": "悬念和节奏控制稳定。",
+          "strengths": ["悬念有效"],
+          "issues": [],
+          "dimension_scores": {"goal": 91, "continuity": 90, "character": 92, "causality": 89, "style": 93, "pacing": 91, "ending": 92},
+          "stop_recommendation": true
+        },
+        {
+          "overall_score": 92,
+          "summary": "悬念和节奏控制稳定。",
+          "strengths": ["悬念有效"],
+          "issues": [],
+          "dimension_scores": {"goal": 92, "continuity": 91, "character": 92, "causality": 90, "style": 93, "pacing": 92, "ending": 92},
+          "stop_recommendation": true
+        }
+      ],
+      "revision": {
+        "before": {
+          "overall_score": 86,
+          "summary": "结尾钩子有效，但人物反应可以更细。",
+          "strengths": ["悬念有效"],
+          "issues": [{"id": "reaction", "category": "character", "severity": "minor", "evidence": "顾遥读信后立即出门", "suggestion": "增加短暂犹豫", "must_fix": false}],
+          "dimension_scores": {"goal": 86, "continuity": 85, "character": 82, "causality": 86, "style": 88, "pacing": 87, "ending": 90},
+          "stop_recommendation": false
+        },
+        "after": {
+          "overall_score": 89,
+          "summary": "人物反应更可信。",
+          "strengths": ["悬念有效", "反应自然"],
+          "issues": [],
+          "dimension_scores": {"goal": 89, "continuity": 88, "character": 88, "causality": 89, "style": 90, "pacing": 88, "ending": 91},
+          "stop_recommendation": true
+        },
+        "decisions": [
+          {"round": 1, "issue_id": "reaction", "decision": "partially_accepted", "reason": "保留紧迫感，只增加一个短暂犹豫"}
+        ]
+      }
+    }
+  ]
+}
